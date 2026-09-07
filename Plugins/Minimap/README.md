@@ -329,6 +329,20 @@ modified, so a roof can vanish from the minimap while rendering normally for the
 - `bUseShowOnlyList` + `InclusionTags` / `CaptureIncludedActors` — allow-list workflow.
 - `bHideLocalPlayerPawn` (default on).
 
+### If the capture comes back black
+
+Three causes, in order of likelihood:
+
+| Cause | Symptom | Fix |
+|---|---|---|
+| **Exposure Mode = Manual** | Game view exposed correctly, capture black | Set **Inherit Scene**. Manual exposure ignores scene lighting, so a dim interior renders to zero. |
+| **Capture Depth too small** | Black or partly empty | Set **Capture Depth = 0** (automatic). A depth smaller than the camera's drop to the floor culls the whole level. |
+| **No temporal history** | Black or noisy under Lumen/TAA | `bAlwaysPersistRenderingState` is on and `WarmUpPasses` defaults to 1. Raise `WarmUpPasses` if still dark. |
+
+Press **Validate Minimap Setup** — it flags the first two by name and dumps full capture
+diagnostics (camera placement, ortho width, view-distance override, exposure mode, filter
+counts) to `LogMinimap`.
+
 ### Refresh
 
 Defaults: capture **once** when ready, then never again until asked.

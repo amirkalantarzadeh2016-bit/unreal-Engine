@@ -538,6 +538,10 @@ FMinimapValidationReport AMinimapBoundsVolume::ValidateMinimapSetup()
 
 		if (IsValid(CaptureComponent))
 		{
+			// The diagnostics dump is where a black-capture problem actually becomes
+			// visible, so always emit it alongside the pass/fail list.
+			UE_LOG(LogMinimap, Log, TEXT("%s"), *CaptureComponent->GetCaptureDiagnostics());
+
 			const FString& CaptureError = CaptureComponent->GetLastCaptureError();
 			if (!CaptureError.IsEmpty())
 			{
@@ -552,6 +556,31 @@ FMinimapValidationReport AMinimapBoundsVolume::ValidateMinimapSetup()
 		{
 			Report.Add(false, TEXT("Capture mode is selected but no capture component exists yet. "
 			                       "It is created when the calibration is applied (BeginPlay)."));
+		}
+
+		// The two settings that most often produce a black capture.
+		if (EffectiveSettings.CaptureDepth > 0.0f)
+		{
+			const float CameraZ = IsValid(CaptureComponent)
+				? CaptureComponent->ResolveCaptureHeight(Calibration)
+				: Calibration.MaxZ + EffectiveSettings.AutoHeightMargin;
+			const float RequiredDepth = FMath::Max(CameraZ - Calibration.MinZ, 1.0f);
+
+			if (EffectiveSettings.CaptureDepth < RequiredDepth)
+			{
+				Report.Add(true, FString::Printf(
+					TEXT("Capture Depth (%.0f cm) is less than the camera's height above the bounds "
+					     "floor (%.0f cm). The level is culled and the map renders black. Set Capture "
+					     "Depth to 0 for automatic."),
+					EffectiveSettings.CaptureDepth, RequiredDepth));
+			}
+		}
+
+		if (EffectiveSettings.ExposureMode == EMinimapCaptureExposureMode::Manual)
+		{
+			Report.Add(false, TEXT("Exposure Mode is Manual, which ignores scene lighting. A dimly lit "
+			                       "interior can capture as black even though the game view looks "
+			                       "correct. Use Inherit Scene unless you have tuned the bias."));
 		}
 
 		if (EffectiveSettings.bUseShowOnlyList &&

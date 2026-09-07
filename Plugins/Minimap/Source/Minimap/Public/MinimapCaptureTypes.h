@@ -53,6 +53,36 @@ enum class EMinimapRefreshPolicy : uint8
 	ThrottledPeriodic	UMETA(DisplayName = "Throttled Periodic (Advanced)")
 };
 
+/**
+ * How the capture's exposure is decided.
+ *
+ * This is the single most common cause of a black capture. Forcing manual exposure means
+ * the image no longer reacts to the scene's lighting, and an interior lit well below the
+ * manual EV renders as black even though the game view looks correct.
+ */
+UENUM(BlueprintType)
+enum class EMinimapCaptureExposureMode : uint8
+{
+	/**
+	 * Do not touch exposure at all - the capture inherits the scene's post-process, so it
+	 * looks like the game does. This is the default and the right answer for almost every
+	 * project, interiors especially.
+	 */
+	InheritScene		UMETA(DisplayName = "Inherit Scene (Recommended)"),
+
+	/**
+	 * Auto exposure with min == max, which pins it to one fixed brightness. Stable frame
+	 * to frame without being disconnected from the scene's lighting.
+	 */
+	FixedAutoExposure	UMETA(DisplayName = "Fixed Auto Exposure"),
+
+	/**
+	 * AEM_Manual driven by the physical camera settings. Fully deterministic, but you must
+	 * dial in the bias for your lighting or the result can be black or blown out.
+	 */
+	Manual				UMETA(DisplayName = "Manual (Advanced)")
+};
+
 /** How the captured texture reaches the widget's Background image. */
 UENUM(BlueprintType)
 enum class EMinimapBackgroundApplyMode : uint8
@@ -179,13 +209,38 @@ struct MINIMAP_API FMinimapCaptureSettings
 
 	// --- Visual -----------------------------------------------------------
 
-	/** Manual exposure, no bloom/vignette/motion blur/DOF. Recommended for readability. */
+	/**
+	 * Disable bloom, vignette, motion blur, DOF and chromatic fringe for a cleaner map.
+	 * Does NOT touch exposure - that is ExposureMode's job.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual")
 	bool bUseFlatCaptureLook = true;
 
+	/** Leave on Inherit Scene unless the capture is genuinely too bright or too dark. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual")
+	EMinimapCaptureExposureMode ExposureMode = EMinimapCaptureExposureMode::InheritScene;
+
+	/** EV offset. Applied for Fixed Auto Exposure and Manual; ignored for Inherit Scene. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual",
-		meta = (EditCondition = "bUseFlatCaptureLook", UIMin = "-4.0", UIMax = "4.0"))
+		meta = (EditCondition = "ExposureMode != EMinimapCaptureExposureMode::InheritScene",
+			UIMin = "-8.0", UIMax = "8.0"))
 	float ExposureBias = 0.0f;
+
+	/** Brightness that auto exposure is pinned to in Fixed Auto Exposure mode. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual",
+		meta = (EditCondition = "ExposureMode == EMinimapCaptureExposureMode::FixedAutoExposure",
+			ClampMin = "0.001"))
+	float FixedExposureBrightness = 1.0f;
+
+	/**
+	 * Extra CaptureScene() passes per refresh. A one-shot capture has no temporal history,
+	 * so effects that accumulate over frames (TAA, Lumen GI) can come back black or noisy
+	 * on the first pass. With bAlwaysPersistRenderingState these extra passes let that
+	 * history build. 1 is usually enough; raise it if the map is still dark under Lumen.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Refresh",
+		meta = (ClampMin = "0", ClampMax = "8"))
+	int32 WarmUpPasses = 1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual")
 	FLinearColor ClearColor = FLinearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -205,6 +260,8 @@ struct MINIMAP_API FMinimapCaptureSettings
 		PeriodicRefreshInterval = FMath::Max(PeriodicRefreshInterval, 0.5f);
 		InitialCaptureDelay     = FMath::Clamp(InitialCaptureDelay, 0.0f, 10.0f);
 		ExposureBias            = FMath::Clamp(ExposureBias, -8.0f, 8.0f);
+		FixedExposureBrightness = FMath::Max(FixedExposureBrightness, 0.001f);
+		WarmUpPasses            = FMath::Clamp(WarmUpPasses, 0, 8);
 	}
 };
 

@@ -96,6 +96,15 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Minimap|Capture")
 	float ResolveCaptureHeight(const FMinimapCalibration& Calibration) const;
 
+	/**
+	 * Human-readable dump of everything that decides whether the capture renders anything:
+	 * camera placement, coverage, view-distance override, exposure mode, filter counts.
+	 * Written to the log by Validate Minimap Setup, and callable on its own when a capture
+	 * comes back black.
+	 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Capture")
+	FString GetCaptureDiagnostics() const;
+
 	/** Free the render target and stop all timers. Called on EndPlay and teardown. */
 	UFUNCTION(BlueprintCallable, Category = "Minimap|Capture")
 	void ReleaseCaptureResources();

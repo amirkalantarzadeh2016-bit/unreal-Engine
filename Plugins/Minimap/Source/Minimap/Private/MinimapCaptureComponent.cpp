@@ -25,6 +25,11 @@ UMinimapCaptureComponent::UMinimapCaptureComponent()
 	// colour for a map. Alpha variant is selected in ApplyVisualDefaults when requested.
 	CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 
+	// Critical for on-demand capture: without this, every CaptureScene() starts from a
+	// blank rendering state, so anything that accumulates across frames (TAA, Lumen GI,
+	// exposure history) has nothing to work from and the result can come back black.
+	bAlwaysPersistRenderingState = true;
+
 	// Never let the capture contribute to gameplay visibility or bounds.
 	bAutoActivate = true;
 	SetHiddenInGame(true);
@@ -110,10 +115,32 @@ bool UMinimapCaptureComponent::ApplyCalibration(const FMinimapCalibration& Calib
 	// so non-square bounds are covered exactly, with no stretch and no crop.
 	OrthoWidth = UMinimapFunctionLibrary::GetCaptureOrthoWidth(Calibration);
 
-	// Render from the camera down to the bounds floor (plus a margin), or the explicit
-	// depth when one is set. This is what lets a user slice off lower floors.
-	const float AutoDepth = FMath::Max(CaptureZ - Calibration.MinZ, 1.0f) + 100.0f;
-	MaxViewDistanceOverride = (Settings.CaptureDepth > 0.0f) ? Settings.CaptureDepth : AutoDepth;
+	// View-distance override is OFF unless a depth slice is explicitly requested.
+	//
+	// Previously this was always set from the bounds, which silently culled the entire
+	// level whenever the value was smaller than the camera's height above the floor -
+	// a black capture with no diagnostic. 0 means "no override", which is the safe default.
+	const float RequiredDepth = FMath::Max(CaptureZ - Calibration.MinZ, 1.0f);
+	if (Settings.CaptureDepth > 0.0f)
+	{
+		MaxViewDistanceOverride = Settings.CaptureDepth;
+
+		// The overwhelmingly common mistake, so name it precisely rather than leaving the
+		// author staring at a black map.
+		if (Settings.CaptureDepth < RequiredDepth)
+		{
+			UE_LOG(LogMinimap, Warning,
+				TEXT("MinimapCapture on '%s': Capture Depth (%.0f cm) is less than the camera's "
+				     "height above the bounds floor (%.0f cm), so the floor and everything on it "
+				     "is culled and the map will be black or partly empty. Set Capture Depth to 0 "
+				     "for automatic, or to at least %.0f."),
+				*GetNameSafe(GetOwner()), Settings.CaptureDepth, RequiredDepth, RequiredDepth);
+		}
+	}
+	else
+	{
+		MaxViewDistanceOverride = 0.0f; // No override: render everything the ortho box sees.
+	}
 
 	ApplyVisualDefaults();
 
@@ -238,6 +265,70 @@ bool UMinimapCaptureComponent::EnsureRenderTarget(const FIntPoint& DesiredSize)
 	return true;
 }
 
+FString UMinimapCaptureComponent::GetCaptureDiagnostics() const
+{
+	const FVector Location = GetComponentLocation();
+	const FRotator Rotation = GetComponentRotation();
+
+	const TCHAR* ExposureText = TEXT("Inherit Scene");
+	switch (Settings.ExposureMode)
+	{
+	case EMinimapCaptureExposureMode::Manual:            ExposureText = TEXT("Manual"); break;
+	case EMinimapCaptureExposureMode::FixedAutoExposure: ExposureText = TEXT("Fixed Auto Exposure"); break;
+	default: break;
+	}
+
+	const float RequiredDepth = FMath::Max(static_cast<float>(Location.Z) - AppliedCalibration.MinZ, 1.0f);
+
+	FString Result;
+	Result += FString::Printf(TEXT("Minimap capture diagnostics for '%s':\n"), *GetNameSafe(GetOwner()));
+	Result += FString::Printf(TEXT("  Calibration applied : %s\n"), bCalibrationApplied ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  Has captured        : %s\n"), bHasCaptured ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  Camera location     : %s\n"), *Location.ToCompactString());
+	Result += FString::Printf(TEXT("  Camera rotation     : %s (pitch must be -90)\n"), *Rotation.ToCompactString());
+	Result += FString::Printf(TEXT("  Bounds Z range      : %.1f .. %.1f\n"), AppliedCalibration.MinZ, AppliedCalibration.MaxZ);
+	Result += FString::Printf(TEXT("  Ortho width         : %.1f cm\n"), OrthoWidth);
+	Result += FString::Printf(TEXT("  Projection          : %s\n"),
+		ProjectionType == ECameraProjectionMode::Orthographic ? TEXT("Orthographic") : TEXT("PERSPECTIVE - wrong"));
+
+	if (MaxViewDistanceOverride > 0.0f)
+	{
+		Result += FString::Printf(TEXT("  Max view distance   : %.1f cm%s\n"), MaxViewDistanceOverride,
+			(MaxViewDistanceOverride < RequiredDepth)
+				? TEXT("  <-- SMALLER THAN THE DROP TO THE FLOOR: the level is being culled. Set Capture Depth to 0.")
+				: TEXT(""));
+		Result += FString::Printf(TEXT("  Needed to reach floor: %.1f cm\n"), RequiredDepth);
+	}
+	else
+	{
+		Result += TEXT("  Max view distance   : no override (renders everything in the ortho box)\n");
+	}
+
+	Result += FString::Printf(TEXT("  Exposure mode       : %s%s\n"), ExposureText,
+		(Settings.ExposureMode == EMinimapCaptureExposureMode::Manual)
+			? TEXT("  <-- manual exposure ignores scene lighting; a dim interior can render black")
+			: TEXT(""));
+	Result += FString::Printf(TEXT("  Warm-up passes      : %d (total captures per refresh: %d)\n"),
+		Settings.WarmUpPasses, 1 + Settings.WarmUpPasses);
+	Result += FString::Printf(TEXT("  Persist render state: %s\n"), bAlwaysPersistRenderingState ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  Capture every frame : %s (expected: no)\n"), bCaptureEveryFrame ? TEXT("yes") : TEXT("no"));
+	Result += FString::Printf(TEXT("  Render target       : %s\n"),
+		IsValid(MinimapRenderTarget)
+			? *FString::Printf(TEXT("%dx%d"), MinimapRenderTarget->SizeX, MinimapRenderTarget->SizeY)
+			: TEXT("NONE"));
+	Result += FString::Printf(TEXT("  Primitive mode      : %s\n"),
+		PrimitiveRenderMode == ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList
+			? TEXT("ShowOnly list") : TEXT("Render scene primitives"));
+	Result += FString::Printf(TEXT("  Hidden actors       : %d\n"), HiddenActors.Num());
+	Result += FString::Printf(TEXT("  ShowOnly actors     : %d%s\n"), ShowOnlyActors.Num(),
+		(PrimitiveRenderMode == ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList && ShowOnlyActors.Num() == 0)
+			? TEXT("  <-- show-only with an empty list renders NOTHING") : TEXT(""));
+	Result += FString::Printf(TEXT("  Last error          : %s\n"),
+		LastCaptureError.IsEmpty() ? TEXT("(none)") : *LastCaptureError);
+
+	return Result;
+}
+
 void UMinimapCaptureComponent::ReleaseCaptureResources()
 {
 	if (const UWorld* World = GetWorld())
@@ -266,22 +357,53 @@ void UMinimapCaptureComponent::ApplyVisualDefaults()
 	// clear colour rather than transparent. Documented as a limitation.
 	CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
 
+	FPostProcessSettings& PP = PostProcessSettings;
+
+	// --- Exposure ---------------------------------------------------------
+	// Handled independently of the flat look. Forcing AEM_Manual here used to be the
+	// default, which rendered dimly lit interiors black: manual exposure ignores the
+	// scene's lighting entirely, so a room lit well below the manual EV goes to zero even
+	// though the game view looks perfectly exposed.
+	switch (Settings.ExposureMode)
+	{
+	case EMinimapCaptureExposureMode::Manual:
+		PP.bOverride_AutoExposureMethod = true;
+		PP.AutoExposureMethod = EAutoExposureMethod::AEM_Manual;
+		PP.bOverride_AutoExposureBias = true;
+		PP.AutoExposureBias = Settings.ExposureBias;
+		break;
+
+	case EMinimapCaptureExposureMode::FixedAutoExposure:
+		// Auto exposure with min == max pins the result to one brightness: stable across
+		// refreshes, but still derived from the scene rather than divorced from it.
+		PP.bOverride_AutoExposureMethod = true;
+		PP.AutoExposureMethod = EAutoExposureMethod::AEM_Histogram;
+		PP.bOverride_AutoExposureMinBrightness = true;
+		PP.AutoExposureMinBrightness = Settings.FixedExposureBrightness;
+		PP.bOverride_AutoExposureMaxBrightness = true;
+		PP.AutoExposureMaxBrightness = Settings.FixedExposureBrightness;
+		PP.bOverride_AutoExposureBias = true;
+		PP.AutoExposureBias = Settings.ExposureBias;
+		break;
+
+	case EMinimapCaptureExposureMode::InheritScene:
+	default:
+		// Explicitly clear the overrides, so switching back to Inherit at runtime actually
+		// releases control instead of leaving a stale forced value behind.
+		PP.bOverride_AutoExposureMethod = false;
+		PP.bOverride_AutoExposureBias = false;
+		PP.bOverride_AutoExposureMinBrightness = false;
+		PP.bOverride_AutoExposureMaxBrightness = false;
+		break;
+	}
+
+	// --- Lens effects -----------------------------------------------------
 	if (!Settings.bUseFlatCaptureLook)
 	{
 		return;
 	}
 
-	// A readable map wants a stable, flat image. Auto exposure would make the map's
-	// brightness drift with whatever the capture happens to frame, and the lens effects
-	// below only blur furniture silhouettes.
-	FPostProcessSettings& PP = PostProcessSettings;
-
-	PP.bOverride_AutoExposureMethod = true;
-	PP.AutoExposureMethod = EAutoExposureMethod::AEM_Manual;
-
-	PP.bOverride_AutoExposureBias = true;
-	PP.AutoExposureBias = Settings.ExposureBias;
-
+	// These only blur furniture silhouettes on a map; none of them affects brightness.
 	PP.bOverride_MotionBlurAmount = true;
 	PP.MotionBlurAmount = 0.0f;
 
@@ -470,7 +592,15 @@ bool UMinimapCaptureComponent::RefreshBackgroundImmediate()
 	ApplyVisibilityFilters();
 
 	TextureTarget = MinimapRenderTarget;
-	CaptureScene();
+
+	// With bAlwaysPersistRenderingState, repeated CaptureScene() calls accumulate the
+	// temporal history that Lumen and TAA need. The first pass on a cold capture is often
+	// black or noisy; the extra passes give it something to converge from.
+	const int32 TotalPasses = 1 + FMath::Clamp(Settings.WarmUpPasses, 0, 8);
+	for (int32 Pass = 0; Pass < TotalPasses; ++Pass)
+	{
+		CaptureScene();
+	}
 
 	bHasCaptured = true;
 	LastCaptureError.Reset();
