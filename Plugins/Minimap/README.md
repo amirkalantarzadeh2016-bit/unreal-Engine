@@ -329,7 +329,24 @@ modified, so a roof can vanish from the minimap while rendering normally for the
 - `bUseShowOnlyList` + `InclusionTags` / `CaptureIncludedActors` — allow-list workflow.
 - `bHideLocalPlayerPawn` (default on).
 
-### If the capture comes back black
+### Root cause of the black capture (fixed)
+
+`USceneCaptureComponent2D::CaptureScene()` is gated on `IsVisible()`, and
+`USceneComponent::IsVisible()` returns **false** when `bHiddenInGame` is set *and*
+`UWorld::UsesGameHiddenFlags()` (i.e. `IsGameWorld()`) is true.
+
+The capture component's constructor called `SetHiddenInGame(true)`. In PIE and in a
+packaged game that made every `CaptureScene()` call a silent no-op, so the render target
+was allocated, bound and handed to the widget — but never written to, leaving it at its
+clear colour. The editor world is not a game world, so an editor-side capture worked,
+which is why the symptom looked like "capture is broken in game only".
+
+A scene capture has no in-game visual representation to hide, so the call was pure harm.
+It is removed, both flags are set explicitly, `OnRegister` re-asserts them, and
+`RefreshBackgroundImmediate` checks `IsRegistered()` and `IsVisible()` up front, naming
+whichever precondition failed instead of returning a blank image.
+
+### If the capture still comes back black
 
 Three causes, in order of likelihood:
 

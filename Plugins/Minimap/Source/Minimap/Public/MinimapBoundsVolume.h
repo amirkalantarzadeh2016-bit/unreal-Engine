@@ -10,6 +10,9 @@ class UBillboardComponent;
 class UBoxComponent;
 class UMinimapCaptureComponent;
 class UMinimapPresetAsset;
+class UTexture;
+class UTexture2D;
+class UTextureRenderTarget2D;
 
 /**
  * Drop one of these in the level, scale its box to cover the playable area, and the minimap
@@ -157,6 +160,16 @@ public:
 		meta = (EditCondition = "bOverridePresetCaptureSettings || Preset == nullptr"))
 	FMinimapCaptureSettings CaptureSettingsOverride;
 
+	/**
+	 * The hand-authored map image for Static Texture mode.
+	 *
+	 * OPTIONAL and backward compatible: leave it empty and nothing changes - the widget
+	 * keeps whatever image M_Minimap already samples. Assign it and the plugin pushes it
+	 * through the same path the capture uses, which also makes it previewable in Details.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background")
+	TObjectPtr<UTexture2D> StaticMapTexture;
+
 	/** Level-specific actors hidden from the minimap capture only (roofs, ceilings). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visibility")
 	TArray<TSoftObjectPtr<AActor>> CaptureExcludedActors;
@@ -249,6 +262,34 @@ public:
 	/** Create and register the capture component if capture mode is on. Idempotent. */
 	UMinimapCaptureComponent* EnsureCaptureComponent();
 
+	// ---------------------------------------------------------------------
+	// Preview (works in the editor, does not change configuration)
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Render a capture for preview purposes WITHOUT switching Background Source and
+	 * WITHOUT touching StaticMapTexture. Works in the editor world as well as in PIE.
+	 * Returns false and fills OutError on failure.
+	 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Preview",
+		meta = (DisplayName = "Capture Preview Now"))
+	bool CapturePreviewNow();
+
+	/** Last preview/live render target, or null if nothing has been captured. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Preview")
+	UTextureRenderTarget2D* GetPreviewRenderTarget() const;
+
+	/** Which source is actually driving the widget right now. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Preview")
+	EMinimapBackgroundSource GetActiveBackgroundSource() const;
+
+	/** Human-readable state of the capture preview, for the Details panel. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Preview")
+	FString GetPreviewStatusText() const;
+
+	/** Error text from the last preview attempt, or empty. */
+	const FString& GetLastPreviewError() const { return LastPreviewError; }
+
 #if WITH_EDITOR
 	/**
 	 * Editor-only convenience: resize the box to encompass eligible level actors.
@@ -280,4 +321,10 @@ private:
 	TObjectPtr<UMinimapCaptureComponent> CaptureComponent;
 
 	bool bCalibrationAppliedThisPlay = false;
+
+	/** Reported by the Details panel when a preview capture fails. */
+	FString LastPreviewError;
+
+	/** Set only while an editor preview is running; lets the capture exist in static mode. */
+	bool bAllowCaptureInStaticMode = false;
 };

@@ -7,6 +7,7 @@
 #include "MinimapCaptureComponent.generated.h"
 
 class UTextureRenderTarget2D;
+class UTexture2D;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMinimapBackgroundCaptured,
 	UMinimapCaptureComponent*, Capture, UTextureRenderTarget2D*, RenderTarget);
@@ -97,6 +98,26 @@ public:
 	float ResolveCaptureHeight(const FMinimapCalibration& Calibration) const;
 
 	/**
+	 * Read the render target back to the CPU and report whether it actually contains an
+	 * image. This is the only way to distinguish "the capture rendered black" from "a good
+	 * capture was lost somewhere in the material/widget pipeline" - working markers and a
+	 * working static map prove neither.
+	 *
+	 * EXPENSIVE: stalls the render thread. Diagnostics only, never on the display path.
+	 * Returns false if there is no render target or no resource to read.
+	 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap|Capture|Debug")
+	bool ProbeRenderTarget(float& OutMeanLuminance, float& OutMaxLuminance, int32& OutNonBlackPixels, FString& OutSummary);
+
+	/** Force capture for a preview WITHOUT changing Background Source. Editor-safe. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Capture")
+	bool CaptureForPreview(const FMinimapCalibration& Calibration, FString& OutError);
+
+	/** Number of CaptureScene() batches that actually ran. 0 means capture never executed. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Capture|Debug")
+	int32 GetCaptureCallCount() const { return CaptureCallCount; }
+
+	/**
 	 * Human-readable dump of everything that decides whether the capture renders anything:
 	 * camera placement, coverage, view-distance override, exposure mode, filter counts.
 	 * Written to the log by Validate Minimap Setup, and callable on its own when a capture
@@ -147,4 +168,10 @@ private:
 	bool bCalibrationApplied = false;
 	bool bHasCaptured = false;
 	bool bRefreshQueued = false;
+
+	/** Incremented per successful RefreshBackgroundImmediate. 0 proves capture never ran. */
+	int32 CaptureCallCount = 0;
+
+	/** Set when a refresh is allowed to bypass the BackgroundSource check (editor preview). */
+	bool bPreviewOverride = false;
 };

@@ -8,6 +8,7 @@
 #include "GameFramework/PlayerController.h"
 #include "MinimapFunctionLibrary.h"
 #include "MinimapModule.h"
+#include "TextureResource.h"
 #include "TimerManager.h"
 
 UMinimapCaptureComponent::UMinimapCaptureComponent()
@@ -30,19 +31,47 @@ UMinimapCaptureComponent::UMinimapCaptureComponent()
 	// exposure history) has nothing to work from and the result can come back black.
 	bAlwaysPersistRenderingState = true;
 
-	// Never let the capture contribute to gameplay visibility or bounds.
+	// ---------------------------------------------------------------------
+	// ROOT CAUSE OF THE BLACK CAPTURE - do not set bHiddenInGame here.
+	//
+	// USceneCaptureComponent2D::CaptureScene() is gated on IsVisible(), and
+	// USceneComponent::IsVisible() returns false when bHiddenInGame is set AND the world
+	// uses game hidden flags (UWorld::UsesGameHiddenFlags() == IsGameWorld(), true in PIE
+	// and in a packaged game). A previous version called SetHiddenInGame(true) here, so
+	// every CaptureScene() call silently did nothing in PIE and the render target stayed
+	// at its clear colour - a black minimap - while the editor world (not a game world)
+	// captured fine.
+	//
+	// A scene capture component has no in-game visual representation to hide in the first
+	// place; its frustum/sprite is editor-only. Both flags are set explicitly so a
+	// Blueprint child or a stale serialized value cannot silently disable capturing again.
+	// ---------------------------------------------------------------------
+	SetHiddenInGame(false);
+	SetVisibility(true);
+
 	bAutoActivate = true;
-	SetHiddenInGame(true);
 }
 
 void UMinimapCaptureComponent::OnRegister()
 {
 	Super::OnRegister();
 
-	// Enforce the invariants even if a Blueprint or preset flipped them.
+	// Enforce the invariants even if a Blueprint, preset or serialized value flipped them.
 	bCaptureEveryFrame = false;
 	bCaptureOnMovement = false;
 	ProjectionType = ECameraProjectionMode::Orthographic;
+
+	// See the constructor: bHiddenInGame would make CaptureScene() a no-op in PIE.
+	if (bHiddenInGame || !GetVisibleFlag())
+	{
+		UE_LOG(LogMinimap, Warning,
+			TEXT("MinimapCapture on '%s': component was hidden or invisible (bHiddenInGame=%d "
+			     "bVisible=%d). CaptureScene() is gated on IsVisible(), so this would silently "
+			     "produce a black render target. Forcing visible."),
+			*GetNameSafe(GetOwner()), bHiddenInGame ? 1 : 0, GetVisibleFlag() ? 1 : 0);
+		SetHiddenInGame(false);
+		SetVisibility(true);
+	}
 }
 
 void UMinimapCaptureComponent::BeginPlay()
@@ -265,6 +294,82 @@ bool UMinimapCaptureComponent::EnsureRenderTarget(const FIntPoint& DesiredSize)
 	return true;
 }
 
+bool UMinimapCaptureComponent::CaptureForPreview(const FMinimapCalibration& Calibration, FString& OutError)
+{
+	// Scoped so an early return can never leave the override latched on.
+	TGuardValue<bool> PreviewGuard(bPreviewOverride, true);
+
+	if (!ApplyCalibration(Calibration, OutError))
+	{
+		return false;
+	}
+
+	if (!RefreshBackgroundImmediate())
+	{
+		OutError = LastCaptureError.IsEmpty() ? TEXT("Preview capture failed.") : LastCaptureError;
+		return false;
+	}
+
+	OutError.Reset();
+	return true;
+}
+
+bool UMinimapCaptureComponent::ProbeRenderTarget(float& OutMeanLuminance, float& OutMaxLuminance, int32& OutNonBlackPixels, FString& OutSummary)
+{
+	OutMeanLuminance = 0.0f;
+	OutMaxLuminance = 0.0f;
+	OutNonBlackPixels = 0;
+
+	if (!IsValid(MinimapRenderTarget))
+	{
+		OutSummary = TEXT("No render target exists. The capture never got as far as allocating one.");
+		return false;
+	}
+
+	FRenderTarget* Resource = MinimapRenderTarget->GameThread_GetRenderTargetResource();
+	if (!Resource)
+	{
+		OutSummary = TEXT("Render target has no RHI resource yet (not initialised, or the "
+		                  "renderer has not caught up). Try again after a capture.");
+		return false;
+	}
+
+	TArray<FColor> Pixels;
+	if (!Resource->ReadPixels(Pixels) || Pixels.Num() == 0)
+	{
+		OutSummary = TEXT("ReadPixels returned nothing - the render target could not be read back.");
+		return false;
+	}
+
+	double LuminanceSum = 0.0;
+	for (const FColor& Pixel : Pixels)
+	{
+		// Rec.709 luma on the sRGB-encoded bytes. Exactness does not matter here; we only
+		// need to answer "is this image black or not".
+		const float Luminance = (0.2126f * Pixel.R + 0.7152f * Pixel.G + 0.0722f * Pixel.B) / 255.0f;
+		LuminanceSum += Luminance;
+		OutMaxLuminance = FMath::Max(OutMaxLuminance, Luminance);
+		if (Pixel.R > 2 || Pixel.G > 2 || Pixel.B > 2)
+		{
+			++OutNonBlackPixels;
+		}
+	}
+
+	OutMeanLuminance = static_cast<float>(LuminanceSum / Pixels.Num());
+	const float NonBlackPercent = 100.0f * OutNonBlackPixels / Pixels.Num();
+
+	OutSummary = FString::Printf(
+		TEXT("Read %d px: mean luminance %.4f, max %.4f, %d non-black (%.1f%%). %s"),
+		Pixels.Num(), OutMeanLuminance, OutMaxLuminance, OutNonBlackPixels, NonBlackPercent,
+		(OutNonBlackPixels == 0)
+			? TEXT("VERDICT: the render target is genuinely BLACK - the problem is in the capture, "
+			       "not in the material/widget pipeline.")
+			: TEXT("VERDICT: the render target CONTAINS AN IMAGE - if the minimap still looks black, "
+			       "the problem is downstream in the material or widget, not in the capture."));
+
+	return true;
+}
+
 FString UMinimapCaptureComponent::GetCaptureDiagnostics() const
 {
 	const FVector Location = GetComponentLocation();
@@ -280,10 +385,31 @@ FString UMinimapCaptureComponent::GetCaptureDiagnostics() const
 
 	const float RequiredDepth = FMath::Max(static_cast<float>(Location.Z) - AppliedCalibration.MinZ, 1.0f);
 
+	const UWorld* World = GetWorld();
+	const bool bGameWorld = World && World->IsGameWorld();
+
 	FString Result;
-	Result += FString::Printf(TEXT("Minimap capture diagnostics for '%s':\n"), *GetNameSafe(GetOwner()));
-	Result += FString::Printf(TEXT("  Calibration applied : %s\n"), bCalibrationApplied ? TEXT("yes") : TEXT("NO"));
-	Result += FString::Printf(TEXT("  Has captured        : %s\n"), bHasCaptured ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("Minimap capture pipeline for '%s':\n"), *GetNameSafe(GetOwner()));
+
+	// --- Stage gates, in the order the engine evaluates them ---------------
+	Result += TEXT("  -- Stage gates (first NO is where the pipeline stops) --\n");
+	Result += FString::Printf(TEXT("  1. Component registered : %s\n"), IsRegistered() ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  2. World has a scene    : %s\n"), (World && World->Scene) ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  3. IsVisible()          : %s%s\n"),
+		IsVisible() ? TEXT("yes") : TEXT("NO"),
+		IsVisible() ? TEXT("")
+			: TEXT("  <-- CaptureScene() is gated on this and will do NOTHING. "
+			       "Caused by bHiddenInGame in a game world."));
+	Result += FString::Printf(TEXT("     bHiddenInGame=%d bVisible=%d gameWorld=%d\n"),
+		bHiddenInGame ? 1 : 0, GetVisibleFlag() ? 1 : 0, bGameWorld ? 1 : 0);
+	Result += FString::Printf(TEXT("  4. Calibration applied  : %s\n"), bCalibrationApplied ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  5. Render target exists : %s\n"), IsValid(MinimapRenderTarget) ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  6. TextureTarget bound  : %s\n"),
+		(TextureTarget && TextureTarget == MinimapRenderTarget) ? TEXT("yes") : TEXT("NO"));
+	Result += FString::Printf(TEXT("  7. Capture batches run  : %d%s\n"), CaptureCallCount,
+		(CaptureCallCount == 0) ? TEXT("  <-- capture NEVER executed") : TEXT(""));
+	Result += FString::Printf(TEXT("  8. Has captured         : %s\n"), bHasCaptured ? TEXT("yes") : TEXT("NO"));
+	Result += TEXT("  -- Configuration --\n");
 	Result += FString::Printf(TEXT("  Camera location     : %s\n"), *Location.ToCompactString());
 	Result += FString::Printf(TEXT("  Camera rotation     : %s (pitch must be -90)\n"), *Rotation.ToCompactString());
 	Result += FString::Printf(TEXT("  Bounds Z range      : %.1f .. %.1f\n"), AppliedCalibration.MinZ, AppliedCalibration.MaxZ);
@@ -563,7 +689,9 @@ void UMinimapCaptureComponent::HandleCoalescedRefresh()
 
 bool UMinimapCaptureComponent::RefreshBackgroundImmediate()
 {
-	if (!IsCaptureEnabled())
+	// bPreviewOverride lets the editor preview render without switching the project's
+	// Background Source - previewing must never mutate configuration.
+	if (!IsCaptureEnabled() && !bPreviewOverride)
 	{
 		return false;
 	}
@@ -589,6 +717,38 @@ bool UMinimapCaptureComponent::RefreshBackgroundImmediate()
 		return false;
 	}
 
+	// CaptureScene() silently no-ops when the component is not visible or not registered,
+	// which is precisely how the black-render-target bug hid for so long. Check the exact
+	// preconditions the engine checks, and say which one failed.
+	if (!IsRegistered())
+	{
+		LastCaptureError = TEXT("Capture component is not registered; CaptureScene() would be ignored.");
+		UE_LOG(LogMinimap, Warning, TEXT("MinimapCapture on '%s': %s"), *GetNameSafe(GetOwner()), *LastCaptureError);
+		return false;
+	}
+
+	if (!IsVisible())
+	{
+		LastCaptureError = FString::Printf(
+			TEXT("Component is not visible (bHiddenInGame=%d bVisible=%d, world is a game world=%d). "
+			     "USceneCaptureComponent2D::CaptureScene() is gated on IsVisible(), so nothing would "
+			     "be rendered and the render target would stay at its clear colour."),
+			bHiddenInGame ? 1 : 0, GetVisibleFlag() ? 1 : 0,
+			(GetWorld() && GetWorld()->IsGameWorld()) ? 1 : 0);
+		UE_LOG(LogMinimap, Error, TEXT("MinimapCapture on '%s': %s"), *GetNameSafe(GetOwner()), *LastCaptureError);
+
+		// Self-heal rather than leaving the user with a black map and no explanation.
+		SetHiddenInGame(false);
+		SetVisibility(true);
+
+		if (!IsVisible())
+		{
+			return false;
+		}
+		UE_LOG(LogMinimap, Warning, TEXT("MinimapCapture on '%s': visibility restored; continuing."),
+			*GetNameSafe(GetOwner()));
+	}
+
 	ApplyVisibilityFilters();
 
 	TextureTarget = MinimapRenderTarget;
@@ -602,6 +762,7 @@ bool UMinimapCaptureComponent::RefreshBackgroundImmediate()
 		CaptureScene();
 	}
 
+	++CaptureCallCount;
 	bHasCaptured = true;
 	LastCaptureError.Reset();
 

@@ -1,0 +1,62 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "IDetailCustomization.h"
+#include "UObject/WeakObjectPtr.h"
+
+class AMinimapBoundsVolume;
+class FDeferredCleanupSlateBrush;
+class IDetailLayoutBuilder;
+class UTexture;
+
+/**
+ * Adds a "Minimap Preview" category to the bounds volume showing BOTH background sources
+ * side by side - the authored static texture and the generated render target - regardless
+ * of which one is currently active, so they can be compared without switching modes.
+ *
+ * Previewing never mutates configuration: the capture button routes through
+ * AMinimapBoundsVolume::CapturePreviewNow, which renders without changing Background
+ * Source and without touching StaticMapTexture.
+ */
+class FMinimapBoundsVolumeDetails : public IDetailCustomization
+{
+public:
+	static TSharedRef<IDetailCustomization> MakeInstance();
+
+	virtual void CustomizeDetails(IDetailLayoutBuilder& DetailBuilder) override;
+
+private:
+	/** Build a preview row for one texture, with a live status line underneath. */
+	void AddPreviewRow(
+		IDetailLayoutBuilder& DetailBuilder,
+		class IDetailCategoryBuilder& Category,
+		const FText& Title,
+		bool bIsStaticSlot,
+		TFunction<UTexture*()> TextureGetter,
+		TFunction<FText()> StatusGetter,
+		TFunction<FText()> ActiveLabelGetter);
+
+	AMinimapBoundsVolume* GetVolume() const { return CustomizedVolume.Get(); }
+
+	FReply OnCaptureClicked();
+	FReply OnValidateClicked();
+
+	/** Rebuild a brush when the underlying texture changes identity. */
+	static const FSlateBrush* ResolveBrush(
+		TSharedPtr<FDeferredCleanupSlateBrush>& BrushSlot,
+		TWeakObjectPtr<UTexture>& CachedTexture,
+		UTexture* CurrentTexture,
+		float PreviewSize);
+
+	TWeakObjectPtr<AMinimapBoundsVolume> CustomizedVolume;
+
+	/** Brushes are held alive here; FDeferredCleanupSlateBrush handles render-thread safety. */
+	TSharedPtr<FDeferredCleanupSlateBrush> StaticPreviewBrush;
+	TSharedPtr<FDeferredCleanupSlateBrush> CapturePreviewBrush;
+
+	TWeakObjectPtr<UTexture> CachedStaticTexture;
+	TWeakObjectPtr<UTexture> CachedCaptureTexture;
+
+	/** Preview edge length in Slate units. */
+	float PreviewSize = 256.0f;
+};

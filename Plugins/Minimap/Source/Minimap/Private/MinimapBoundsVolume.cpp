@@ -200,6 +200,19 @@ bool AMinimapBoundsVolume::ApplyCalibration()
 	UE_LOG(LogMinimap, Log, TEXT("'%s': calibration applied to the minimap subsystem."), *GetName());
 	bCalibrationAppliedThisPlay = true;
 
+	// Static mode: publish the authored texture through the SAME channel the capture uses,
+	// so both sources are previewable and the widget has one code path. Leaving
+	// StaticMapTexture empty preserves the original behaviour exactly - the widget simply
+	// keeps whatever image M_Minimap already samples.
+	if (GetEffectiveCaptureSettings().BackgroundSource == EMinimapBackgroundSource::StaticTexture)
+	{
+		if (StaticMapTexture)
+		{
+			Subsystem->SetStaticBackgroundTexture(StaticMapTexture);
+		}
+		return true;
+	}
+
 	// Drive the capture from the SAME calibration the markers use. Nothing else computes
 	// a second coordinate transform, which is what guarantees image/marker agreement.
 	if (UMinimapCaptureComponent* Capture = EnsureCaptureComponent())
@@ -338,8 +351,10 @@ UMinimapCaptureComponent* AMinimapBoundsVolume::EnsureCaptureComponent()
 	const FMinimapCaptureSettings EffectiveSettings = GetEffectiveCaptureSettings();
 
 	// Nothing is allocated unless capture mode is actually selected, which keeps the
-	// legacy static-texture path exactly as cheap as it was.
-	if (EffectiveSettings.BackgroundSource != EMinimapBackgroundSource::SceneCapture)
+	// legacy static-texture path exactly as cheap as it was. bAllowInStaticMode is set
+	// only by the editor preview, which must be able to render a comparison image without
+	// changing the configured Background Source.
+	if (EffectiveSettings.BackgroundSource != EMinimapBackgroundSource::SceneCapture && !bAllowCaptureInStaticMode)
 	{
 		return nullptr;
 	}
@@ -720,3 +735,88 @@ void AMinimapBoundsVolume::PostEditChangeProperty(FPropertyChangedEvent& Propert
 }
 
 #endif // WITH_EDITOR
+
+
+// ---------------------------------------------------------------------------
+// Editor / Blueprint preview
+// ---------------------------------------------------------------------------
+
+bool AMinimapBoundsVolume::CapturePreviewNow()
+{
+	LastPreviewError.Reset();
+
+    // Allow the component to exist even in Static Texture mode, purely so the two sources
+    // can be compared side by side. This flag never touches Background Source itself.
+	TGuardValue<bool> AllowGuard(bAllowCaptureInStaticMode, true);
+
+	UMinimapCaptureComponent* Capture = EnsureCaptureComponent();
+	if (!Capture)
+	{
+		LastPreviewError = TEXT("Could not create the capture component (dedicated server, or no world).");
+		UE_LOG(LogMinimap, Warning, TEXT("'%s': %s"), *GetName(), *LastPreviewError);
+		return false;
+	}
+
+	const FMinimapCalibration Calibration = BuildCalibration();
+
+	FString Error;
+	if (!Capture->CaptureForPreview(Calibration, Error))
+	{
+		LastPreviewError = Error;
+		UE_LOG(LogMinimap, Warning, TEXT("'%s': preview capture failed - %s"), *GetName(), *Error);
+		UE_LOG(LogMinimap, Log, TEXT("%s"), *Capture->GetCaptureDiagnostics());
+		return false;
+	}
+
+	// Prove what actually landed in the render target rather than assuming.
+	float MeanLuminance = 0.0f;
+	float MaxLuminance = 0.0f;
+	int32 NonBlackPixels = 0;
+	FString ProbeSummary;
+	if (Capture->ProbeRenderTarget(MeanLuminance, MaxLuminance, NonBlackPixels, ProbeSummary))
+	{
+		UE_LOG(LogMinimap, Log, TEXT("'%s': %s"), *GetName(), *ProbeSummary);
+		if (NonBlackPixels == 0)
+		{
+			LastPreviewError = TEXT("Capture ran but the render target is black. See LogMinimap for the "
+			                        "pipeline report.");
+			UE_LOG(LogMinimap, Log, TEXT("%s"), *Capture->GetCaptureDiagnostics());
+		}
+	}
+
+	return true;
+}
+
+UTextureRenderTarget2D* AMinimapBoundsVolume::GetPreviewRenderTarget() const
+{
+	return IsValid(CaptureComponent) ? CaptureComponent->GetMinimapRenderTarget() : nullptr;
+}
+
+EMinimapBackgroundSource AMinimapBoundsVolume::GetActiveBackgroundSource() const
+{
+	return GetEffectiveCaptureSettings().BackgroundSource;
+}
+
+FString AMinimapBoundsVolume::GetPreviewStatusText() const
+{
+	if (!IsValid(CaptureComponent))
+	{
+		return TEXT("No capture component yet - press Capture Preview Now.");
+	}
+	if (!CaptureComponent->GetMinimapRenderTarget())
+	{
+		return TEXT("Capture component exists but no render target has been created.");
+	}
+	if (CaptureComponent->GetCaptureCallCount() == 0)
+	{
+		return TEXT("Render target allocated but never captured into - the image is the clear colour.");
+	}
+	if (!LastPreviewError.IsEmpty())
+	{
+		return FString::Printf(TEXT("Last attempt reported: %s"), *LastPreviewError);
+	}
+
+	const UTextureRenderTarget2D* RT = CaptureComponent->GetMinimapRenderTarget();
+	return FString::Printf(TEXT("Captured %d time(s) - %dx%d."),
+		CaptureComponent->GetCaptureCallCount(), RT->SizeX, RT->SizeY);
+}

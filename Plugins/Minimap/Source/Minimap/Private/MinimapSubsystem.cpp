@@ -66,6 +66,7 @@ void UMinimapSubsystem::Deinitialize()
 	// inheriting a stale provider and appearing to have duplicate resources.
 	BoundsVolumes.Reset();
 	BackgroundProvider.Reset();
+	StaticBackgroundTexture = nullptr;
 
 	Super::Deinitialize();
 }
@@ -747,9 +748,34 @@ UMinimapCaptureComponent* UMinimapSubsystem::GetBackgroundProvider() const
 
 UTexture* UMinimapSubsystem::GetBackgroundTexture() const
 {
-	const UMinimapCaptureComponent* Provider = BackgroundProvider.Get();
-	// Implicit upcast: UTextureRenderTarget2D -> UTextureRenderTarget -> UTexture.
-	return Provider ? static_cast<UTexture*>(Provider->GetMinimapRenderTarget()) : nullptr;
+	// A live capture provider wins; otherwise the authored static texture, if any.
+	if (const UMinimapCaptureComponent* Provider = BackgroundProvider.Get())
+	{
+		// Implicit upcast: UTextureRenderTarget2D -> UTextureRenderTarget -> UTexture.
+		if (UTextureRenderTarget2D* RenderTarget = Provider->GetMinimapRenderTarget())
+		{
+			return RenderTarget;
+		}
+	}
+	return StaticBackgroundTexture;
+}
+
+void UMinimapSubsystem::SetStaticBackgroundTexture(UTexture* StaticTexture)
+{
+	if (StaticBackgroundTexture == StaticTexture)
+	{
+		return;
+	}
+
+	StaticBackgroundTexture = StaticTexture;
+
+	// A static texture and a live capture are mutually exclusive as the active source.
+	if (StaticTexture)
+	{
+		BackgroundProvider.Reset();
+	}
+
+	OnBackgroundTextureChanged.Broadcast(GetBackgroundTexture());
 }
 
 void UMinimapSubsystem::RequestBackgroundRefresh()

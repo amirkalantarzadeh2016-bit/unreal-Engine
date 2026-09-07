@@ -188,6 +188,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
 	void NotifyMinimapContentReady();
 
+	/**
+	 * Publish an authored static texture as the background. Lets Static Texture mode use
+	 * the same delivery path as capture, so both are previewable and the widget has one
+	 * code path. Clears any active capture provider.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void SetStaticBackgroundTexture(UTexture* StaticTexture);
+
 	/** Fired when the background texture becomes available or is replaced. */
 	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
 	FOnMinimapBackgroundTextureChanged OnBackgroundTextureChanged;
@@ -252,6 +260,10 @@ private:
 	TArray<TWeakObjectPtr<AMinimapBoundsVolume>> BoundsVolumes;
 
 	TWeakObjectPtr<UMinimapCaptureComponent> BackgroundProvider;
+
+	/** Authored texture published in Static Texture mode. Null when capture drives it. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture> StaticBackgroundTexture;
 
 	FName RequiredBoundsTag = NAME_None;
 
