@@ -477,6 +477,11 @@ void UMinimapWidgetBase::ApplyBackgroundTexture(UTexture* BackgroundTexture)
 
 	if (bUseBrush && IsValid(Background))
 	{
-		Background->SetBrushFromTexture(BackgroundTexture, /*bMatchSize=*/false);
+		// SetBrushFromTexture takes a UTexture2D and a render target is NOT one - it
+		// derives from UTexture via UTextureRenderTarget. SetBrushResourceObject accepts
+		// any resource object, and has the additional advantage of leaving the brush's
+		// existing DrawAs / ImageSize / tint alone, so the widget's mask, clipping and
+		// layout are preserved exactly as authored.
+		Background->SetBrushResourceObject(BackgroundTexture);
 	}
 }

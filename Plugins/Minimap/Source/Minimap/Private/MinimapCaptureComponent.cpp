@@ -226,8 +226,7 @@ bool UMinimapCaptureComponent::EnsureRenderTarget(const FIntPoint& DesiredSize)
 	NewTarget->RenderTargetFormat = Settings.bCaptureAlpha ? RTF_RGBA8 : RTF_RGBA8_SRGB;
 	NewTarget->ClearColor = Settings.ClearColor;
 	NewTarget->bAutoGenerateMips = false;
-	NewTarget->bGPUSharedFlag = false;
-	NewTarget->InitAutoFormat(DesiredSize.X, DesiredSize.Y);
+	NewTarget->InitAutoFormat(static_cast<uint32>(DesiredSize.X), static_cast<uint32>(DesiredSize.Y));
 	NewTarget->UpdateResourceImmediate(true);
 
 	MinimapRenderTarget = NewTarget;

@@ -748,7 +748,8 @@ UMinimapCaptureComponent* UMinimapSubsystem::GetBackgroundProvider() const
 UTexture* UMinimapSubsystem::GetBackgroundTexture() const
 {
 	const UMinimapCaptureComponent* Provider = BackgroundProvider.Get();
-	return Provider ? Cast<UTexture>(Provider->GetMinimapRenderTarget()) : nullptr;
+	// Implicit upcast: UTextureRenderTarget2D -> UTextureRenderTarget -> UTexture.
+	return Provider ? static_cast<UTexture*>(Provider->GetMinimapRenderTarget()) : nullptr;
 }
 
 void UMinimapSubsystem::RequestBackgroundRefresh()
