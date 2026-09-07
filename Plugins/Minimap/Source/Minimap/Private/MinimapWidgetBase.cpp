@@ -6,7 +6,10 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Engine/Canvas.h"
 #include "Engine/Texture.h"
+#include "Engine/TextureRenderTarget2D.h"
+#include "Kismet/KismetRenderingLibrary.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MinimapFunctionLibrary.h"
 #include "MinimapMarkerWidget.h"
@@ -198,7 +201,13 @@ void UMinimapWidgetBase::HandleViewUpdated(UMinimapViewComponent* View, const TA
 		return;
 	}
 
-	if (bDriveMaterialParameters)
+	if (BackgroundApplyMode == EMinimapBackgroundApplyMode::CompositedView)
+	{
+		// The compositor already applies pan, zoom and rotation, so the material must NOT
+		// apply them a second time. Its scalars are deliberately left alone here.
+		UpdateCompositedBackground(View);
+	}
+	else if (bDriveMaterialParameters)
 	{
 		UpdateMaterialParameters(*View);
 	}
@@ -432,6 +441,14 @@ void UMinimapWidgetBase::ApplyBackgroundTexture(UTexture* BackgroundTexture)
 
 	AppliedBackgroundTexture = BackgroundTexture;
 
+	if (BackgroundApplyMode == EMinimapBackgroundApplyMode::CompositedView)
+	{
+		// Hold the map as the compositor's SOURCE. What the widget displays is the
+		// composited target, which UpdateCompositedBackground assigns.
+		CompositorSourceTexture = BackgroundTexture;
+		return;
+	}
+
 	if (!BackgroundTexture)
 	{
 		// Null means "capture is gone" - leave whatever static background is configured
@@ -484,4 +501,117 @@ void UMinimapWidgetBase::ApplyBackgroundTexture(UTexture* BackgroundTexture)
 		// layout are preserved exactly as authored.
 		Background->SetBrushResourceObject(BackgroundTexture);
 	}
+}
+
+
+// ---------------------------------------------------------------------------
+// Composited view - the only path that cannot tile
+// ---------------------------------------------------------------------------
+
+bool UMinimapWidgetBase::UpdateCompositedBackground(UMinimapViewComponent* View)
+{
+	if (!IsValid(View) || !IsValid(Background))
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
+	UTexture* SourceMap = CompositorSourceTexture;
+	if (!SourceMap)
+	{
+		// Nothing captured yet. Leave whatever is on screen rather than flashing black.
+		return false;
+	}
+
+	// --- Target -----------------------------------------------------------
+	const int32 Resolution = FMath::Clamp(CompositedResolution, 64, 4096);
+	if (!IsValid(CompositedRenderTarget) ||
+	    CompositedRenderTarget->SizeX != Resolution ||
+	    CompositedRenderTarget->SizeY != Resolution)
+	{
+		CompositedRenderTarget = UKismetRenderingLibrary::CreateRenderTarget2D(
+			World, Resolution, Resolution, RTF_RGBA8_SRGB, FLinearColor::Black, /*bAutoGenerateMipMaps=*/false);
+
+		if (!IsValid(CompositedRenderTarget))
+		{
+			UE_LOG(LogMinimap, Warning, TEXT("'%s': could not create the composited render target."), *GetName());
+			return false;
+		}
+
+		// Clamp here too, so nothing downstream can wrap this target either.
+		CompositedRenderTarget->AddressX = TA_Clamp;
+		CompositedRenderTarget->AddressY = TA_Clamp;
+
+		// New target: hand it to the image once. The object identity is then stable, so
+		// later frames only redraw its contents.
+		Background->SetBrushResourceObject(CompositedRenderTarget);
+	}
+
+	// --- View maths -------------------------------------------------------
+	// N is the viewer's position on the WHOLE map, in [-1, 1]; UVn puts it in [0, 1].
+	const FVector2D Normalized = View->GetViewerNormalizedOnFixedMap();
+	if (Normalized.ContainsNaN())
+	{
+		return false;
+	}
+
+	// Deliberately NOT clamped: a viewer outside the bounds must push the quad off the
+	// view and leave black, which is exactly the required out-of-bounds behaviour.
+	const FVector2D UVn(Normalized.X * 0.5 + 0.5, Normalized.Y * 0.5 + 0.5);
+
+	float Zoom = View->ZoomMultiplier;
+	if (const UMinimapSubsystem* Subsystem = UMinimapSubsystem::Get(this))
+	{
+		Zoom *= Subsystem->GetCalibration().Zoom;
+	}
+	Zoom = FMath::Max(Zoom, 0.01f);
+
+	// At Zoom 1 the whole map fills the view; at Zoom 2 it is drawn twice as large, so
+	// half of it is visible. Same meaning the marker projection gives Zoom.
+	const float ViewSize = static_cast<float>(Resolution);
+	const FVector2D MapDrawSize(ViewSize * Zoom, ViewSize * Zoom);
+
+	// Rotate about the viewer and place the viewer at the centre of the view. Canvas
+	// rotates the quad about PivotPoint, expressed as a fraction of the quad, so putting
+	// the pivot on the viewer means the map turns beneath a fixed centre.
+	const FVector2D ViewCentre(ViewSize * 0.5f, ViewSize * 0.5f);
+	const FVector2D ScreenPosition = ViewCentre - UVn * MapDrawSize;
+
+	// Counter-rotate: as the viewer turns right, the map turns left. Same sign convention
+	// as the compass, which uses -ViewYaw.
+	const float RotationDegrees =
+		(View->OrientationMode == EMinimapOrientationMode::RotatingMap) ? -View->GetViewYaw() : 0.0f;
+
+	// --- Draw -------------------------------------------------------------
+	UCanvas* Canvas = nullptr;
+	FVector2D CanvasSize = FVector2D::ZeroVector;
+	FDrawToRenderTargetContext Context;
+
+	// Clearing first is what produces solid black outside the map: the quad below covers
+	// only the map, and everything it does not cover keeps the clear colour. No sampler is
+	// ever asked for a UV outside [0, 1], so wrapping and edge smear are both impossible.
+	UKismetRenderingLibrary::ClearRenderTarget2D(World, CompositedRenderTarget, FLinearColor::Black);
+
+	UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(World, CompositedRenderTarget, Canvas, CanvasSize, Context);
+	if (Canvas)
+	{
+		Canvas->K2_DrawTexture(
+			SourceMap,
+			ScreenPosition,
+			MapDrawSize,
+			/*CoordinatePosition=*/FVector2D::ZeroVector,
+			/*CoordinateSize=*/FVector2D(1.0, 1.0),
+			FLinearColor::White,
+			EBlendMode::BLEND_Opaque,
+			RotationDegrees,
+			/*PivotPoint=*/UVn);
+	}
+	UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(World, Context);
+
+	return true;
 }

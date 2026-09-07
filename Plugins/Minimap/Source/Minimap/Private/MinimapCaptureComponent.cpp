@@ -8,6 +8,9 @@
 #include "GameFramework/PlayerController.h"
 #include "MinimapFunctionLibrary.h"
 #include "MinimapModule.h"
+#include "CanvasItem.h"
+#include "Engine/Canvas.h"
+#include "Kismet/KismetRenderingLibrary.h"
 #include "TextureResource.h"
 #include "TimerManager.h"
 
@@ -281,6 +284,12 @@ bool UMinimapCaptureComponent::EnsureRenderTarget(const FIntPoint& DesiredSize)
 
 	NewTarget->RenderTargetFormat = Settings.bCaptureAlpha ? RTF_RGBA8 : RTF_RGBA8_SRGB;
 	NewTarget->ClearColor = Settings.ClearColor;
+
+	// Clamp, never wrap. A wrapping sampler is what makes the map repeat when the widget
+	// pans past an edge. This governs the texture's OWN sampler; a material whose Texture
+	// Sample node uses a shared Wrap sampler ignores it (see the CompositedView mode).
+	NewTarget->AddressX = TA_Clamp;
+	NewTarget->AddressY = TA_Clamp;
 	NewTarget->bAutoGenerateMips = false;
 	NewTarget->InitAutoFormat(static_cast<uint32>(DesiredSize.X), static_cast<uint32>(DesiredSize.Y));
 	NewTarget->UpdateResourceImmediate(true);
@@ -553,6 +562,91 @@ void UMinimapCaptureComponent::ApplyVisualDefaults()
 // Visibility filtering
 // ---------------------------------------------------------------------------
 
+void UMinimapCaptureComponent::ApplyLightingMode()
+{
+	// Everything here lives on THIS capture component's own show flags and capture source.
+	// The main scene's lighting and shadows are untouched - a scene capture renders with
+	// its own view family.
+	switch (Settings.LightingMode)
+	{
+	case EMinimapCaptureLightingMode::UnlitBaseColor:
+		// Base colour bypasses lighting entirely, so shadows cannot exist by construction.
+		CaptureSource = ESceneCaptureSource::SCS_BaseColor;
+		break;
+
+	case EMinimapCaptureLightingMode::LitNoShadows:
+		CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+		ShowFlags.SetDynamicShadows(false);
+		ShowFlags.SetAmbientOcclusion(false);
+		ShowFlags.SetContactShadows(false);
+		break;
+
+	case EMinimapCaptureLightingMode::Lit:
+	default:
+		CaptureSource = ESceneCaptureSource::SCS_FinalColorLDR;
+		ShowFlags.SetDynamicShadows(true);
+		break;
+	}
+
+	// Independent of lighting mode: these only smear the image on a map.
+	if (Settings.bUseFlatCaptureLook)
+	{
+		ShowFlags.SetMotionBlur(false);
+		ShowFlags.SetDepthOfField(false);
+		ShowFlags.SetBloom(false);
+	}
+}
+
+void UMinimapCaptureComponent::ApplyEdgeMask()
+{
+	const int32 Margin = FMath::Clamp(Settings.EdgeMaskPixels, 0, 64);
+	if (Margin <= 0 || !IsValid(MinimapRenderTarget))
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	const float Width  = static_cast<float>(MinimapRenderTarget->SizeX);
+	const float Height = static_cast<float>(MinimapRenderTarget->SizeY);
+	const float M = static_cast<float>(Margin);
+
+	if (Width <= 2.0f * M || Height <= 2.0f * M)
+	{
+		return; // Margin would consume the whole image.
+	}
+
+	UCanvas* Canvas = nullptr;
+	FVector2D CanvasSize = FVector2D::ZeroVector;
+	FDrawToRenderTargetContext Context;
+
+	// Draws INTO the existing render target without clearing it, so the captured image
+	// survives and only the rim is overwritten.
+	UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(World, MinimapRenderTarget, Canvas, CanvasSize, Context);
+	if (Canvas)
+	{
+		const FLinearColor Edge = Settings.ClearColor;
+
+		// Four solid strips. FCanvasTileItem's colour-only constructor needs no texture.
+		auto DrawStrip = [Canvas, &Edge](float X, float Y, float W, float H)
+		{
+			FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Edge);
+			Tile.BlendMode = SE_BLEND_Opaque;
+			Canvas->DrawItem(Tile);
+		};
+
+		DrawStrip(0.0f,      0.0f,          Width,  M);              // top
+		DrawStrip(0.0f,      Height - M,    Width,  M);              // bottom
+		DrawStrip(0.0f,      0.0f,          M,      Height);         // left
+		DrawStrip(Width - M, 0.0f,          M,      Height);         // right
+	}
+	UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(World, Context);
+}
+
 void UMinimapCaptureComponent::ApplyVisibilityFilters()
 {
 	UWorld* World = GetWorld();
@@ -751,6 +845,11 @@ bool UMinimapCaptureComponent::RefreshBackgroundImmediate()
 
 	ApplyVisibilityFilters();
 
+	// Set immediately before capturing: USceneCaptureComponent::UpdateShowFlags() rebuilds
+	// ShowFlags from ShowFlagSettings on register and on property edits, so applying them
+	// here guarantees they are in effect for this capture.
+	ApplyLightingMode();
+
 	TextureTarget = MinimapRenderTarget;
 
 	// With bAlwaysPersistRenderingState, repeated CaptureScene() calls accumulate the
@@ -761,6 +860,10 @@ bool UMinimapCaptureComponent::RefreshBackgroundImmediate()
 	{
 		CaptureScene();
 	}
+
+	// After the scene is in the target, stamp the rim so clamped sampling past the edge
+	// returns the clear colour instead of a smeared edge pixel.
+	ApplyEdgeMask();
 
 	++CaptureCallCount;
 	bHasCaptured = true;

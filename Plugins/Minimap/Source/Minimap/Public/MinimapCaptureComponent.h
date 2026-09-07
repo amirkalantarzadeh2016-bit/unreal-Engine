@@ -142,6 +142,12 @@ private:
 	/** Manual exposure and no post-process noise, for a readable map. */
 	void ApplyVisualDefaults();
 
+	/** Shadow / lighting handling via this capture's own show flags and capture source. */
+	void ApplyLightingMode();
+
+	/** Stamp the render target's outer rim with the clear colour after a capture. */
+	void ApplyEdgeMask();
+
 	/** Rebuild HiddenActors / ShowOnlyActors. One actor iteration, only on refresh. */
 	void ApplyVisibilityFilters();
 

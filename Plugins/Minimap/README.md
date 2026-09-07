@@ -360,6 +360,39 @@ Press **Validate Minimap Setup** — it flags the first two by name and dumps fu
 diagnostics (camera placement, ortho width, view-distance override, exposure mode, filter
 counts) to `LogMinimap`.
 
+### Shadows
+
+`LightingMode` (default **Lit, No Shadows**) acts only on this capture component's own
+show flags and capture source. A scene capture renders with its own view family, so the
+main scene's lighting and shadows are never touched.
+
+| Mode | Effect |
+|---|---|
+| `Lit` | Full scene lighting including shadows |
+| `LitNoShadows` *(default)* | `DynamicShadows`, `ContactShadows` and `AmbientOcclusion` off in the capture only |
+| `UnlitBaseColor` | `SCS_BaseColor` — no lighting at all, so shadows cannot exist |
+
+### Tiling / repeated map (root cause and fix)
+
+The map repeats when the sampler is asked for a UV outside `[0,1]` and **wraps**. Three
+independent defences, in order of strength:
+
+1. **Render target address mode** is now `TA_Clamp` on both axes. This fixes it outright
+   *if* the map material's Texture Sample node has **Sampler Source = From texture asset**.
+   It has no effect if that node uses a shared **Wrap** sampler — a shared sampler's
+   addressing is baked into the material asset, and no plugin code can override it from
+   outside.
+2. **`EdgeMaskPixels`** (default 4) stamps the render target's outer rim with the clear
+   colour after each capture, so a *clamped* sample past the edge returns black rather
+   than smearing the edge pixel outward.
+3. **`BackgroundApplyMode = CompositedView`** — the guaranteed fix. The plugin composites
+   the final view itself (pan, zoom, rotation) into its own render target and displays
+   that, bypassing the map material. A single quad is drawn with a fixed `[0,1]`
+   coordinate span, so no sampler is ever asked for an out-of-range UV: **tiling is
+   impossible by construction**, and everything the quad does not cover keeps the black
+   clear colour. Trade-off: bypassing the material also bypasses a circular mask baked
+   into it — use widget clipping or a mask overlay for the shape.
+
 ### Refresh
 
 Defaults: capture **once** when ready, then never again until asked.

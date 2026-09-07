@@ -53,6 +53,27 @@ enum class EMinimapRefreshPolicy : uint8
 	ThrottledPeriodic	UMETA(DisplayName = "Throttled Periodic (Advanced)")
 };
 
+/** How the minimap capture is lit. Affects the capture ONLY, never the main scene. */
+UENUM(BlueprintType)
+enum class EMinimapCaptureLightingMode : uint8
+{
+	/** Full scene lighting including shadows. Matches the game view; can read very dark. */
+	Lit					UMETA(DisplayName = "Lit (Scene Shadows)"),
+
+	/**
+	 * Scene lighting with shadows, contact shadows and ambient occlusion switched off in
+	 * the capture's show flags. Keeps colour and light direction cues but removes the dark
+	 * blobs that make an interior map unreadable. Recommended default.
+	 */
+	LitNoShadows		UMETA(DisplayName = "Lit, No Shadows (Recommended)"),
+
+	/**
+	 * Raw base colour - no lighting, no shadows, no exposure. The flattest, most legible
+	 * "floor plan" look, at the cost of losing all lighting cues.
+	 */
+	UnlitBaseColor		UMETA(DisplayName = "Unlit (Base Color)")
+};
+
 /**
  * How the capture's exposure is decided.
  *
@@ -100,7 +121,21 @@ enum class EMinimapBackgroundApplyMode : uint8
 	ImageBrush			UMETA(DisplayName = "Image Brush (No Material)"),
 
 	/** Try the material parameter; fall back to the brush if the material lacks it. */
-	Automatic			UMETA(DisplayName = "Automatic (Parameter, then Brush)")
+	Automatic			UMETA(DisplayName = "Automatic (Parameter, then Brush)"),
+
+	/**
+	 * The plugin composites the final minimap view itself - pan, zoom and rotation - into
+	 * its own render target and shows that, bypassing the map material entirely.
+	 *
+	 * This is the only mode that CANNOT tile or wrap, because the plugin controls the
+	 * sampling: anything outside the map is the black clear colour, by construction. Use
+	 * it when the map material samples with a shared Wrap sampler, which no amount of
+	 * plugin code can override from outside that asset.
+	 *
+	 * Trade-off: bypassing the material also bypasses anything else it does, including a
+	 * circular mask. Use widget clipping or a mask overlay for the shape instead.
+	 */
+	CompositedView		UMETA(DisplayName = "Composited View (No Material, Never Tiles)")
 };
 
 /**
@@ -216,6 +251,26 @@ struct MINIMAP_API FMinimapCaptureSettings
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual")
 	bool bUseFlatCaptureLook = true;
 
+	/**
+	 * Shadow / lighting handling. Applied through the capture component's own show flags
+	 * and capture source, so the main scene's lighting and shadows are never touched.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual")
+	EMinimapCaptureLightingMode LightingMode = EMinimapCaptureLightingMode::LitNoShadows;
+
+	/**
+	 * Force the outermost N pixels of the render target to the clear colour after each
+	 * capture.
+	 *
+	 * With a clamping sampler, sampling past the map edge repeats the edge pixel, which
+	 * smears map content across the outside region. A black rim means those clamped
+	 * samples return black instead. Costs a few pixels of the very edge of the bounds,
+	 * which the fit padding already leaves empty. 0 disables.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual",
+		meta = (ClampMin = "0", ClampMax = "64"))
+	int32 EdgeMaskPixels = 4;
+
 	/** Leave on Inherit Scene unless the capture is genuinely too bright or too dark. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visual")
 	EMinimapCaptureExposureMode ExposureMode = EMinimapCaptureExposureMode::InheritScene;
@@ -262,6 +317,7 @@ struct MINIMAP_API FMinimapCaptureSettings
 		ExposureBias            = FMath::Clamp(ExposureBias, -8.0f, 8.0f);
 		FixedExposureBrightness = FMath::Max(FixedExposureBrightness, 0.001f);
 		WarmUpPasses            = FMath::Clamp(WarmUpPasses, 0, 8);
+		EdgeMaskPixels          = FMath::Clamp(EdgeMaskPixels, 0, 64);
 	}
 };
 

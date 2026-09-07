@@ -14,6 +14,7 @@ class UMinimapSubsystem;
 class UMinimapTrackedComponent;
 class UMinimapViewComponent;
 class UTexture;
+class UTextureRenderTarget2D;
 class UWidget;
 
 /**
@@ -157,6 +158,28 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Minimap")
 	void ApplyBackgroundTexture(UTexture* BackgroundTexture);
 
+	/**
+	 * Composite the final minimap view into the plugin's own render target: the map is
+	 * drawn once, panned/zoomed/rotated to the current view, on a black background.
+	 *
+	 * This is what makes tiling impossible - the plugin places a single quad rather than
+	 * asking a sampler to fetch UVs beyond [0,1]. Everything the quad does not cover stays
+	 * at the clear colour, so outside the bounds is solid black by construction.
+	 *
+	 * Called automatically each update in Composited View mode.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap")
+	bool UpdateCompositedBackground(UMinimapViewComponent* View);
+
+	/** The composited view render target, or null when the mode is not active. */
+	UFUNCTION(BlueprintPure, Category = "Minimap")
+	UTextureRenderTarget2D* GetCompositedRenderTarget() const { return CompositedRenderTarget; }
+
+	/** Edge length of the composited render target. Defaults to the widget's own size. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Material",
+		meta = (ClampMin = "64", ClampMax = "4096"))
+	int32 CompositedResolution = 512;
+
 	/** The background texture currently applied, or null in static-texture mode. */
 	UFUNCTION(BlueprintPure, Category = "Minimap")
 	UTexture* GetAppliedBackgroundTexture() const { return AppliedBackgroundTexture; }
@@ -234,6 +257,14 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture> AppliedBackgroundTexture;
+
+	/** Owned by the widget so it dies with it; recreated on demand. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextureRenderTarget2D> CompositedRenderTarget;
+
+	/** Source map the compositor draws from (the capture RT or the static texture). */
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture> CompositorSourceTexture;
 
 	/** Set once the material is known to lack MapTextureParameterName, to stop log spam. */
 	bool bWarnedMissingTextureParameter = false;
