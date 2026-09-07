@@ -2,6 +2,8 @@
 
 #include "Components/BillboardComponent.h"
 #include "Components/BoxComponent.h"
+#include "Engine/Texture2D.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "MinimapModule.h"
 #include "MinimapCaptureComponent.h"
