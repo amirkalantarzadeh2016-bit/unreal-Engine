@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Kismet/BlueprintFunctionLibrary.h"
+#include "MinimapCaptureTypes.h"
 #include "MinimapTypes.h"
 #include "MinimapFunctionLibrary.generated.h"
 
@@ -175,4 +176,60 @@ public:
 	/** Normalize any angle to [-180, 180). Safe against NaN and huge magnitudes. */
 	UFUNCTION(BlueprintPure, Category = "Minimap|Rotation")
 	static float NormalizeAngleDegrees(float AngleDegrees);
+
+	// ---------------------------------------------------------------------
+	// Scene-capture alignment
+	//
+	// These make the generated background agree with the marker projection using the
+	// SAME calibration, so no axis transform is ever applied twice. Kept here (rather
+	// than inside the capture component) specifically so they are unit-testable.
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Can the calibration's axis convention be reproduced by orienting a camera?
+	 *
+	 * The map from view space to normalized space is linear with determinant
+	 * SignU * SignV. A camera can only produce ORIENTATION-PRESERVING transforms, so the
+	 * determinant must be positive - that is, bInvertU must equal bInvertV.
+	 *
+	 * If exactly one invert flag is set the convention is a MIRROR, which no camera
+	 * orientation can produce. Rather than emit a silently flipped map, capture mode
+	 * refuses to activate and reports this.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Capture")
+	static bool IsCaptureAlignmentSupported(const FMinimapCalibration& Calibration, FString& OutReason);
+
+	/**
+	 * World yaw for a downward capture whose rendered image lines up with the calibration.
+	 *
+	 *   CaptureYaw = MapYaw + (bSwapUV ? -90 : 0) + (bInvertU ? 180 : 0)
+	 *
+	 * Derivation: with Pitch = -90 and Roll = 0, the camera's up vector in world is
+	 * (cos Yaw, sin Yaw, 0). Setting that equal to the world direction that projects to
+	 * N = (0, -1) - the top edge of the map - yields the expression above. Because the
+	 * transform is a rotation, aligning "up" aligns "right" automatically.
+	 *
+	 * Returns false (and leaves OutCaptureYaw at 0) when the convention is a mirror.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Capture")
+	static bool ComputeCaptureYaw(const FMinimapCalibration& Calibration, float& OutCaptureYaw, FString& OutReason);
+
+	/**
+	 * Orthographic width covering the calibration's full effective extent.
+	 * OrthoWidth spans the image's horizontal (U) axis, whose half-extent is
+	 * EffectiveExtent.X, so this is simply 2 * EffectiveExtent.X.
+	 *
+	 * Note this uses the EFFECTIVE extent, so when bPreserveAspectRatio is on the capture
+	 * covers the padded square - the same area the markers are normalized against.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Capture")
+	static float GetCaptureOrthoWidth(const FMinimapCalibration& Calibration);
+
+	/**
+	 * Render-target size whose aspect matches the effective extent, with the longest edge
+	 * equal to MaxDimension. Matching the aspect is what stops non-square bounds from
+	 * stretching the image. Both axes are clamped to [16, 8192] and rounded to even.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Capture")
+	static FIntPoint ComputeCaptureResolution(const FMinimapCalibration& Calibration, int32 MaxDimension = 1024);
 };

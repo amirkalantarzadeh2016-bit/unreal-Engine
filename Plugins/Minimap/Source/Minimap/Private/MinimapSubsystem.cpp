@@ -1,8 +1,11 @@
 #include "MinimapSubsystem.h"
 
 #include "Engine/Engine.h"
+#include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "MinimapBoundsVolume.h"
+#include "MinimapCaptureComponent.h"
 #include "MinimapFunctionLibrary.h"
 #include "MinimapModule.h"
 #include "MinimapTrackedComponent.h"
@@ -58,6 +61,11 @@ void UMinimapSubsystem::Deinitialize()
 	Markers.Reset();
 	Views.Reset();
 	SnapshotScratch.Reset();
+
+	// Dropping these on teardown is what stops a PIE restart or level transition from
+	// inheriting a stale provider and appearing to have duplicate resources.
+	BoundsVolumes.Reset();
+	BackgroundProvider.Reset();
 
 	Super::Deinitialize();
 }
@@ -543,4 +551,261 @@ FMinimapMarkerSnapshot UMinimapSubsystem::BuildSnapshot(
 
 	Snapshot.bVisible = bVisible;
 	return Snapshot;
+}
+
+
+// ---------------------------------------------------------------------------
+// Bounds selection
+// ---------------------------------------------------------------------------
+
+void UMinimapSubsystem::RegisterBoundsVolume(AMinimapBoundsVolume* Volume)
+{
+	if (!IsValid(Volume))
+	{
+		return;
+	}
+
+	BoundsVolumes.RemoveAll([](const TWeakObjectPtr<AMinimapBoundsVolume>& Entry) { return !Entry.IsValid(); });
+
+	const TWeakObjectPtr<AMinimapBoundsVolume> WeakVolume(Volume);
+	if (!BoundsVolumes.Contains(WeakVolume))
+	{
+		BoundsVolumes.Add(WeakVolume);
+	}
+
+	// Surface ambiguity as soon as it appears rather than at first use.
+	if (BoundsVolumes.Num() > 1)
+	{
+		FString Reason;
+		if (!ResolveAuthoritativeBounds(Reason))
+		{
+			UE_LOG(LogMinimap, Warning, TEXT("Minimap bounds selection is ambiguous: %s"), *Reason);
+		}
+	}
+}
+
+void UMinimapSubsystem::UnregisterBoundsVolume(AMinimapBoundsVolume* Volume)
+{
+	if (!Volume)
+	{
+		return;
+	}
+
+	BoundsVolumes.RemoveAll(
+		[Volume](const TWeakObjectPtr<AMinimapBoundsVolume>& Entry)
+		{
+			return !Entry.IsValid() || Entry.Get() == Volume;
+		});
+}
+
+AMinimapBoundsVolume* UMinimapSubsystem::ResolveAuthoritativeBounds(FString& OutReason) const
+{
+	TArray<AMinimapBoundsVolume*> Eligible;
+	Eligible.Reserve(BoundsVolumes.Num());
+	for (const TWeakObjectPtr<AMinimapBoundsVolume>& Weak : BoundsVolumes)
+	{
+		if (AMinimapBoundsVolume* Volume = Weak.Get())
+		{
+			Eligible.Add(Volume);
+		}
+	}
+
+	if (Eligible.Num() == 0)
+	{
+		OutReason = TEXT("No AMinimapBoundsVolume is registered. Place one in the level and make "
+		                 "sure Apply On Begin Play is enabled.");
+		return nullptr;
+	}
+
+	// --- 1. Explicit preference ------------------------------------------
+	TArray<AMinimapBoundsVolume*> Preferred;
+	for (AMinimapBoundsVolume* Volume : Eligible)
+	{
+		if (Volume->bPreferredBounds)
+		{
+			Preferred.Add(Volume);
+		}
+	}
+	if (Preferred.Num() == 1)
+	{
+		OutReason = TEXT("Selected by bPreferredBounds.");
+		return Preferred[0];
+	}
+	if (Preferred.Num() > 1)
+	{
+		OutReason = FString::Printf(
+			TEXT("%d bounds volumes have bPreferredBounds set; exactly one must. Candidates: %s"),
+			Preferred.Num(), *FString::JoinBy(Preferred, TEXT(", "),
+				[](const AMinimapBoundsVolume* V) { return V->GetName(); }));
+		return nullptr;
+	}
+
+	// --- 2. Configured tag ------------------------------------------------
+	if (!RequiredBoundsTag.IsNone())
+	{
+		TArray<AMinimapBoundsVolume*> Tagged;
+		for (AMinimapBoundsVolume* Volume : Eligible)
+		{
+			if (Volume->BoundsSelectionTag == RequiredBoundsTag)
+			{
+				Tagged.Add(Volume);
+			}
+		}
+		if (Tagged.Num() == 1)
+		{
+			OutReason = FString::Printf(TEXT("Selected by BoundsSelectionTag '%s'."), *RequiredBoundsTag.ToString());
+			return Tagged[0];
+		}
+		if (Tagged.Num() > 1)
+		{
+			OutReason = FString::Printf(
+				TEXT("%d bounds volumes share BoundsSelectionTag '%s'; the tag must be unique."),
+				Tagged.Num(), *RequiredBoundsTag.ToString());
+			return nullptr;
+		}
+		OutReason = FString::Printf(
+			TEXT("No bounds volume carries the required BoundsSelectionTag '%s'."), *RequiredBoundsTag.ToString());
+		return nullptr;
+	}
+
+	// --- 3. Unique fallback -----------------------------------------------
+	if (Eligible.Num() == 1)
+	{
+		OutReason = TEXT("Selected as the only registered bounds volume.");
+		return Eligible[0];
+	}
+
+	// Deliberately refuses to guess. Picking an arbitrary first actor here is exactly the
+	// silent misconfiguration this function exists to prevent.
+	OutReason = FString::Printf(
+		TEXT("%d bounds volumes are registered and none is distinguished. Set bPreferredBounds on "
+		     "one, or give them BoundsSelectionTags and call SetRequiredBoundsTag. Candidates: %s"),
+		Eligible.Num(), *FString::JoinBy(Eligible, TEXT(", "),
+			[](const AMinimapBoundsVolume* V) { return V->GetName(); }));
+	return nullptr;
+}
+
+void UMinimapSubsystem::SetRequiredBoundsTag(FName NewTag)
+{
+	RequiredBoundsTag = NewTag;
+}
+
+// ---------------------------------------------------------------------------
+// Background
+// ---------------------------------------------------------------------------
+
+void UMinimapSubsystem::RegisterBackgroundProvider(UMinimapCaptureComponent* Provider)
+{
+	if (!IsValid(Provider))
+	{
+		return;
+	}
+
+	if (BackgroundProvider.Get() == Provider)
+	{
+		// Already the active provider: re-broadcast so a widget created after the first
+		// capture still receives the texture.
+		OnBackgroundTextureChanged.Broadcast(GetBackgroundTexture());
+		return;
+	}
+
+	// One provider at a time. Several widgets share this single resource rather than each
+	// spawning a capture of its own.
+	BackgroundProvider = Provider;
+
+	Provider->OnBackgroundCaptured.RemoveAll(this);
+	Provider->OnBackgroundCaptured.AddDynamic(this, &UMinimapSubsystem::HandleBackgroundCaptured);
+
+	OnBackgroundTextureChanged.Broadcast(GetBackgroundTexture());
+}
+
+void UMinimapSubsystem::UnregisterBackgroundProvider(UMinimapCaptureComponent* Provider)
+{
+	if (!Provider || BackgroundProvider.Get() != Provider)
+	{
+		return;
+	}
+
+	Provider->OnBackgroundCaptured.RemoveAll(this);
+	BackgroundProvider.Reset();
+	OnBackgroundTextureChanged.Broadcast(nullptr);
+}
+
+void UMinimapSubsystem::HandleBackgroundCaptured(UMinimapCaptureComponent* Capture, UTextureRenderTarget2D* RenderTarget)
+{
+	if (BackgroundProvider.Get() != Capture)
+	{
+		return;
+	}
+	OnBackgroundTextureChanged.Broadcast(RenderTarget);
+}
+
+UMinimapCaptureComponent* UMinimapSubsystem::GetBackgroundProvider() const
+{
+	return BackgroundProvider.Get();
+}
+
+UTexture* UMinimapSubsystem::GetBackgroundTexture() const
+{
+	const UMinimapCaptureComponent* Provider = BackgroundProvider.Get();
+	return Provider ? Cast<UTexture>(Provider->GetMinimapRenderTarget()) : nullptr;
+}
+
+void UMinimapSubsystem::RequestBackgroundRefresh()
+{
+	if (UMinimapCaptureComponent* Provider = BackgroundProvider.Get())
+	{
+		Provider->RequestBackgroundRefresh();
+		return;
+	}
+
+	// No provider yet: fall back to the authoritative volume, which will create one.
+	FString Reason;
+	if (AMinimapBoundsVolume* Volume = ResolveAuthoritativeBounds(Reason))
+	{
+		Volume->RefreshMinimapBackground();
+	}
+	else
+	{
+		UE_LOG(LogMinimap, Warning, TEXT("RequestBackgroundRefresh: %s"), *Reason);
+	}
+}
+
+void UMinimapSubsystem::RefitBoundsAndRefresh()
+{
+	FString Reason;
+	if (AMinimapBoundsVolume* Volume = ResolveAuthoritativeBounds(Reason))
+	{
+		Volume->FitBoundsAndRefresh();
+	}
+	else
+	{
+		UE_LOG(LogMinimap, Warning, TEXT("RefitBoundsAndRefresh: %s"), *Reason);
+	}
+}
+
+void UMinimapSubsystem::ApplyCaptureSettingsAndRefresh()
+{
+	FString Reason;
+	if (AMinimapBoundsVolume* Volume = ResolveAuthoritativeBounds(Reason))
+	{
+		Volume->ApplyCaptureSettingsAndRefresh();
+	}
+	else
+	{
+		UE_LOG(LogMinimap, Warning, TEXT("ApplyCaptureSettingsAndRefresh: %s"), *Reason);
+	}
+}
+
+void UMinimapSubsystem::NotifyMinimapContentReady()
+{
+	FString Reason;
+	if (AMinimapBoundsVolume* Volume = ResolveAuthoritativeBounds(Reason))
+	{
+		Volume->NotifyMinimapContentReady();
+	}
+	else
+	{
+		UE_LOG(LogMinimap, Warning, TEXT("NotifyMinimapContentReady: %s"), *Reason);
+	}
 }

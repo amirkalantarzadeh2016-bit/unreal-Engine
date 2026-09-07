@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
+#include "Engine/Texture.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "MinimapFunctionLibrary.h"
 #include "MinimapMarkerWidget.h"
@@ -134,6 +135,19 @@ void UMinimapWidgetBase::InitializeMinimap(UMinimapViewComponent* InView)
 
 	InView->OnMinimapViewUpdated.AddUniqueDynamic(this, &UMinimapWidgetBase::HandleViewUpdated);
 
+	// Background updates arrive on capture, never per frame, and are entirely separate
+	// from the marker path.
+	if (UMinimapSubsystem* Subsystem = UMinimapSubsystem::Get(this))
+	{
+		Subsystem->OnBackgroundTextureChanged.AddUniqueDynamic(this, &UMinimapWidgetBase::HandleBackgroundTextureChanged);
+
+		// A widget created after the capture already happened still needs the texture.
+		if (UTexture* Existing = Subsystem->GetBackgroundTexture())
+		{
+			ApplyBackgroundTexture(Existing);
+		}
+	}
+
 	// Tell the subsystem this view is on screen, and force one immediate pass so the
 	// minimap is correct on the frame it appears rather than up to TickInterval later.
 	InView->SetViewRenderingEnabled(true);
@@ -152,6 +166,13 @@ void UMinimapWidgetBase::ShutdownMinimap()
 
 		// Stops the subsystem projecting for a view nobody is displaying.
 		View->SetViewRenderingEnabled(false);
+	}
+
+	// Every delegate this widget bound must come off, or a recreated widget would leave
+	// the old one receiving broadcasts.
+	if (UMinimapSubsystem* Subsystem = UMinimapSubsystem::Get(this))
+	{
+		Subsystem->OnBackgroundTextureChanged.RemoveDynamic(this, &UMinimapWidgetBase::HandleBackgroundTextureChanged);
 	}
 
 	BoundView.Reset();
@@ -389,4 +410,73 @@ void UMinimapWidgetBase::SetMinimapExpanded(bool bExpanded)
 
 	bMinimapExpanded = bExpanded;
 	HandlePopEffect(bExpanded);
+}
+
+
+// ---------------------------------------------------------------------------
+// Captured background
+// ---------------------------------------------------------------------------
+
+void UMinimapWidgetBase::HandleBackgroundTextureChanged(UTexture* BackgroundTexture)
+{
+	ApplyBackgroundTexture(BackgroundTexture);
+}
+
+void UMinimapWidgetBase::ApplyBackgroundTexture(UTexture* BackgroundTexture)
+{
+	if (AppliedBackgroundTexture == BackgroundTexture)
+	{
+		// Applying a texture invalidates widget layout, so never do it redundantly.
+		return;
+	}
+
+	AppliedBackgroundTexture = BackgroundTexture;
+
+	if (!BackgroundTexture)
+	{
+		// Null means "capture is gone" - leave whatever static background is configured
+		// in place rather than blanking the map.
+		return;
+	}
+
+	const bool bTryMaterial =
+		BackgroundApplyMode == EMinimapBackgroundApplyMode::MaterialParameter ||
+		BackgroundApplyMode == EMinimapBackgroundApplyMode::Automatic;
+
+	bool bAppliedToMaterial = false;
+
+	if (bTryMaterial && IsValid(CachedMapMID) && !MapTextureParameterName.IsNone())
+	{
+		// Set, then read back through the Blueprint-stable accessor. If the material has
+		// no such parameter the write is a no-op and the read returns null, which is how
+		// we detect the miss without depending on the overload set of
+		// GetTextureParameterValue (its signature differs across 5.x point releases).
+		CachedMapMID->SetTextureParameterValue(MapTextureParameterName, BackgroundTexture);
+
+		const UTexture* ReadBack = CachedMapMID->K2_GetTextureParameterValue(MapTextureParameterName);
+		bAppliedToMaterial = (ReadBack == BackgroundTexture);
+
+		if (!bAppliedToMaterial && !bWarnedMissingTextureParameter)
+		{
+			bWarnedMissingTextureParameter = true;
+			UE_LOG(LogMinimap, Warning,
+				TEXT("'%s': the map material has no texture parameter named '%s'. %s"),
+				*GetName(), *MapTextureParameterName.ToString(),
+				BackgroundApplyMode == EMinimapBackgroundApplyMode::Automatic
+					? TEXT("Falling back to setting the Image brush, which bypasses the material "
+					       "(PlayerX/PlayerY/MapRotation will no longer affect the background). Add a "
+					       "Texture Sample Parameter with that name to M_Minimap to keep them working.")
+					: TEXT("Nothing was applied. Add the parameter, or switch Background Apply Mode "
+					       "to Automatic or Image Brush."));
+		}
+	}
+
+	const bool bUseBrush =
+		BackgroundApplyMode == EMinimapBackgroundApplyMode::ImageBrush ||
+		(BackgroundApplyMode == EMinimapBackgroundApplyMode::Automatic && !bAppliedToMaterial);
+
+	if (bUseBrush && IsValid(Background))
+	{
+		Background->SetBrushFromTexture(BackgroundTexture, /*bMatchSize=*/false);
+	}
 }

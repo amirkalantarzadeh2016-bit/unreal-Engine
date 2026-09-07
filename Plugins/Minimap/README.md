@@ -267,7 +267,89 @@ things to check first if the build complains.
 
 ---
 
-## 8. Test coverage
+## 8. Automatic top-down capture
+
+Optional. `BackgroundSource` defaults to **Static Texture**, so an existing project is
+completely unaffected until it opts in.
+
+### How alignment is guaranteed
+
+The capture is driven by the **same `FMinimapCalibration` the markers use**. Nothing
+computes a second coordinate transform.
+
+```
+CaptureYaw  = MapYaw + (bSwapUV ? -90 : 0) + (bInvertU ? 180 : 0)
+Pitch       = -90, Roll = 0
+OrthoWidth  = 2 * EffectiveExtent.X
+RT aspect   = EffectiveExtent.X : EffectiveExtent.Y
+Location    = (WorldCenter.X, WorldCenter.Y, ResolveCaptureHeight())
+```
+
+**Derivation.** With `Pitch = -90, Roll = 0` the camera's up vector in world is
+`(cos Yaw, sin Yaw, 0)`. Setting that equal to the world direction that projects to
+`N = (0,-1)` — the top edge of the map — yields the expression above. Because the
+transform is a rotation, aligning "up" aligns "right" automatically.
+
+**Mirrored conventions are refused, not faked.** The view→normalized map has determinant
+`SignU · SignV`. A camera can only produce orientation-preserving transforms, so
+`bInvertU` must equal `bInvertV`. If exactly one is set, the convention is a *mirror*,
+no camera orientation can reproduce it, capture refuses to activate, and validation
+reports it. The static background is used instead.
+
+### Aspect-ratio policy (explicit)
+
+**Preserve the complete bounds; pad, never crop, never stretch.**
+
+- `bPreserveAspectRatio = true` (default) squares the effective extent to `max(X, Y)`.
+  The padding is part of the calibration, so markers are normalized against the *same*
+  padded square the capture covers — padding is included in marker conversion by
+  construction.
+- The render target aspect always matches the effective extent, so non-square bounds
+  produce a non-square image rather than a stretched one.
+
+### Capture height
+
+| Mode | Semantics |
+|---|---|
+| `AutoAboveBounds` *(default)* | `MaxZ + AutoHeightMargin`. Cheap, no scan. |
+| `AutoAboveGeometry` | Scans the tallest eligible actor in the bounds once **per refresh**, then adds the margin. Aims to sit above furniture rather than inside it. |
+| `ManualWorldHeight` | Explicit world Z. |
+| `RelativeWithinBounds` | `Lerp(MinZ, MaxZ, alpha)`. Advanced; a blunt floor selector. |
+
+`CaptureDepth` controls how far down the camera renders (0 = to the bounds floor).
+**No single capture height solves every indoor or multi-floor case** — see Limitations.
+
+### Visibility
+
+Uses Scene Capture visibility only. Actor visibility in the main game view is never
+modified, so a roof can vanish from the minimap while rendering normally for the player.
+
+- `CaptureExcludedActors` — explicit level references (on the bounds volume).
+- `ExclusionTags` — resolved by one actor iteration **per refresh**, never per frame.
+- `bUseShowOnlyList` + `InclusionTags` / `CaptureIncludedActors` — allow-list workflow.
+- `bHideLocalPlayerPawn` (default on).
+
+### Refresh
+
+Defaults: capture **once** when ready, then never again until asked.
+`bCaptureEveryFrame` and `bCaptureOnMovement` are forced off in the constructor **and**
+in `OnRegister`, so a preset cannot re-enable them. Marker updates never touch capture.
+
+Requests inside `RefreshCoalesceSeconds` (default 0.15 s) collapse into **one** capture,
+so a batch of furniture edits costs one render rather than one per item.
+
+**Refreshing the image ≠ re-fitting the bounds** — these are deliberately separate:
+
+| Call | Moves calibration? |
+|---|---|
+| `RequestBackgroundRefresh()` | No. Same bounds, new image. **Use this for furniture.** |
+| `RefitBoundsAndRefresh()` | **Yes.** Re-fits bounds; markers and image both shift. |
+| `ApplyCaptureSettingsAndRefresh()` | No. Re-reads settings, may resize the RT. |
+| `NotifyMinimapContentReady()` | No. Readiness entry point for streamed content. |
+
+---
+
+## 9. Test coverage
 
 `Private/Tests/MinimapProjectionTests.cpp`, all under the `Minimap.` prefix:
 
@@ -285,6 +367,10 @@ things to check first if the build complains.
 | `View.RespawnAndRepossession` | Resolution priority, destroyed-candidate fallthrough, repossession |
 | `Compatibility.LegacyMaterialParity` | **Grid sweep vs the original `MapRangeClamped` pair**, and proof the two axis conventions differ |
 | `Projection.RoundTrip` | UV round trip, `Rot2D` properties, invert flags, zoom linearity, height ratio |
+| `Capture.BackgroundMarkerAlignment` | **432+ point checks**: background image position (derived independently from the camera basis) vs marker projection, across every supported convention × MapYaw × aspect × square/non-square, at centre, edges, corners and intermediate points |
+| `Capture.MirroredConventionRejected` | Mirrored axis conventions refuse capture and explain why |
+| `Capture.CoverageAndResolution` | Ortho width covers the full extent, RT aspect matches world aspect, resolution clamping, degenerate bounds |
+| `Capture.SettingsSanitization` | Defaults preserve legacy behaviour; hostile values clamped; validation report counting |
 
 The projection model was additionally verified against an independent reimplementation:
 legacy material parity is exact (maximum absolute error 0 across the sampled grid).

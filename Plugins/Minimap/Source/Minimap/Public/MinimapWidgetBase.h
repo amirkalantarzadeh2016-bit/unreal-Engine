@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "MinimapCaptureTypes.h"
 #include "MinimapTypes.h"
 #include "MinimapWidgetBase.generated.h"
 
@@ -12,6 +13,7 @@ class UMinimapMarkerWidget;
 class UMinimapSubsystem;
 class UMinimapTrackedComponent;
 class UMinimapViewComponent;
+class UTexture;
 class UWidget;
 
 /**
@@ -78,6 +80,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Material")
 	bool bDriveMaterialParameters = true;
 
+	/**
+	 * Texture parameter on M_Minimap that receives the automatically captured map.
+	 * Only used in Automatic Scene Capture mode; the static-texture path never touches it,
+	 * so existing materials without this parameter are unaffected.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Material")
+	FName MapTextureParameterName = TEXT("MapTexture");
+
+	/** How a captured background reaches the Background image. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Material")
+	EMinimapBackgroundApplyMode BackgroundApplyMode = EMinimapBackgroundApplyMode::Automatic;
+
 	/** Counter-rotate North_Container to -ViewYaw each update. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Material")
 	bool bDriveNorthIndicator = true;
@@ -137,6 +151,17 @@ public:
 	UMaterialInstanceDynamic* GetCachedMapMaterial() const { return CachedMapMID; }
 
 	/**
+	 * Display a background texture (normally the capture render target).
+	 * Safe to call with null, which restores whatever the material/brush already had.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap")
+	void ApplyBackgroundTexture(UTexture* BackgroundTexture);
+
+	/** The background texture currently applied, or null in static-texture mode. */
+	UFUNCTION(BlueprintPure, Category = "Minimap")
+	UTexture* GetAppliedBackgroundTexture() const { return AppliedBackgroundTexture; }
+
+	/**
 	 * Expand/collapse the minimap. Calls HandlePopEffect only on an actual state change,
 	 * so the animation is never restarted from the top while already expanded.
 	 */
@@ -164,6 +189,10 @@ protected:
 	/** Bound to the view's update delegate; this is the widget's only per-update work. */
 	UFUNCTION()
 	void HandleViewUpdated(UMinimapViewComponent* View, const TArray<FMinimapMarkerSnapshot>& Snapshots);
+
+	/** Bound to the subsystem's background delegate. Runs on capture, not per frame. */
+	UFUNCTION()
+	void HandleBackgroundTextureChanged(UTexture* BackgroundTexture);
 
 	/** Locate (or create) the owning local player's view component. */
 	UMinimapViewComponent* ResolveViewComponent();
@@ -202,6 +231,12 @@ private:
 
 	float CachedCompassAngle = 0.0f;
 	bool bCompassInitialized = false;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture> AppliedBackgroundTexture;
+
+	/** Set once the material is known to lack MapTextureParameterName, to stop log spam. */
+	bool bWarnedMissingTextureParameter = false;
 
 	bool bMinimapExpanded = false;
 };

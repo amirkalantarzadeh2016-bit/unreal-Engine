@@ -1,15 +1,21 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "MinimapCaptureTypes.h"
 #include "MinimapTypes.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "MinimapSubsystem.generated.h"
 
+class AMinimapBoundsVolume;
+class UMinimapCaptureComponent;
 class UMinimapTrackedComponent;
 class UMinimapViewComponent;
+class UTexture;
+class UTextureRenderTarget2D;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapCalibrationChanged, const FMinimapCalibration&, NewCalibration);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapMarkerRegistryChanged, UMinimapTrackedComponent*, Marker);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapBackgroundTextureChanged, UTexture*, BackgroundTexture);
 
 /**
  * Central minimap manager: owns the calibration, the marker registry, the view registry,
@@ -110,6 +116,83 @@ public:
 	FOnMinimapMarkerRegistryChanged OnMarkerUnregistered;
 
 	// ---------------------------------------------------------------------
+	// Bounds selection
+	// ---------------------------------------------------------------------
+
+	/** Called by AMinimapBoundsVolume::BeginPlay. Idempotent. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Bounds")
+	void RegisterBoundsVolume(AMinimapBoundsVolume* Volume);
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Bounds")
+	void UnregisterBoundsVolume(AMinimapBoundsVolume* Volume);
+
+	/**
+	 * Deterministic selection, in strict priority order:
+	 *   1. a volume with bPreferredBounds set;
+	 *   2. a volume whose BoundsSelectionTag matches RequiredBoundsTag;
+	 *   3. the unique registered volume.
+	 *
+	 * Ambiguity (several equally eligible volumes) returns null and explains why, rather
+	 * than picking an arbitrary first actor. OutReason is always filled in.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Bounds")
+	AMinimapBoundsVolume* ResolveAuthoritativeBounds(FString& OutReason) const;
+
+	/** When set, only a volume with this BoundsSelectionTag is eligible in step 2. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Bounds")
+	void SetRequiredBoundsTag(FName NewTag);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Bounds")
+	FName GetRequiredBoundsTag() const { return RequiredBoundsTag; }
+
+	// ---------------------------------------------------------------------
+	// Background
+	// ---------------------------------------------------------------------
+
+	/** Called by the capture component once it is aligned. Replaces any prior provider. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void RegisterBackgroundProvider(UMinimapCaptureComponent* Provider);
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void UnregisterBackgroundProvider(UMinimapCaptureComponent* Provider);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Background")
+	UMinimapCaptureComponent* GetBackgroundProvider() const;
+
+	/**
+	 * The captured render target, or null when running in static-texture mode.
+	 * Several widgets may share this one resource rather than each owning a capture.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Background")
+	UTexture* GetBackgroundTexture() const;
+
+	/**
+	 * Coalesced background re-render within the CURRENT bounds. Call this after a batch
+	 * of furniture edits. Does NOT move or resize the calibration.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void RequestBackgroundRefresh();
+
+	/**
+	 * Re-fit the authoritative bounds volume to the level, re-apply the calibration, then
+	 * refresh. This DOES change the calibration - markers and image both move.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void RefitBoundsAndRefresh();
+
+	/** Re-read preset/override capture settings, re-apply, and refresh. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void ApplyCaptureSettingsAndRefresh();
+
+	/** Explicit readiness entry point for streamed or procedurally generated content. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
+	void NotifyMinimapContentReady();
+
+	/** Fired when the background texture becomes available or is replaced. */
+	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
+	FOnMinimapBackgroundTextureChanged OnBackgroundTextureChanged;
+
+	// ---------------------------------------------------------------------
 	// Update control
 	// ---------------------------------------------------------------------
 
@@ -132,6 +215,10 @@ public:
 	void ForceUpdate();
 
 private:
+	/** Bound to the active provider's capture delegate; re-broadcasts to widgets. */
+	UFUNCTION()
+	void HandleBackgroundCaptured(UMinimapCaptureComponent* Capture, UTextureRenderTarget2D* RenderTarget);
+
 	/** One batched pass across all active views. */
 	void UpdateAllViews(bool bForceFullUpdate);
 
@@ -160,6 +247,13 @@ private:
 
 	float TickInterval = 1.0f / 30.0f;
 	float TimeAccumulator = 0.0f;
+
+	/** Weak: the registry must never keep a level actor alive across a transition. */
+	TArray<TWeakObjectPtr<AMinimapBoundsVolume>> BoundsVolumes;
+
+	TWeakObjectPtr<UMinimapCaptureComponent> BackgroundProvider;
+
+	FName RequiredBoundsTag = NAME_None;
 
 	bool bCalibrationValid = false;
 	bool bCalibrationDirty = true;

@@ -277,3 +277,96 @@ float UMinimapFunctionLibrary::NormalizeAngleDegrees(float AngleDegrees)
 	// FRotator::NormalizeAxis returns (-180, 180].
 	return FRotator::NormalizeAxis(AngleDegrees);
 }
+
+// ---------------------------------------------------------------------------
+// Scene-capture alignment
+// ---------------------------------------------------------------------------
+
+bool UMinimapFunctionLibrary::IsCaptureAlignmentSupported(const FMinimapCalibration& Calibration, FString& OutReason)
+{
+	if (!Calibration.IsValidCalibration(&OutReason))
+	{
+		return false;
+	}
+
+	// The view-space -> normalized map is:
+	//     no swap: [[0, SignU], [-SignV, 0]]
+	//     swap:    [[SignU, 0], [0, SignV]]
+	// Both have determinant SignU * SignV. A camera orientation is a rotation, which is
+	// orientation-preserving, so a negative determinant (a mirror) is unreachable.
+	if (Calibration.bInvertU != Calibration.bInvertV)
+	{
+		OutReason = TEXT("bInvertU and bInvertV differ, which describes a mirrored axis "
+		                 "convention. No camera orientation can produce a mirrored image, so "
+		                 "automatic capture cannot be aligned to this calibration. Either set "
+		                 "both invert flags the same, or mirror the map inside the material.");
+		return false;
+	}
+
+	OutReason.Reset();
+	return true;
+}
+
+bool UMinimapFunctionLibrary::ComputeCaptureYaw(const FMinimapCalibration& Calibration, float& OutCaptureYaw, FString& OutReason)
+{
+	OutCaptureYaw = 0.0f;
+
+	if (!IsCaptureAlignmentSupported(Calibration, OutReason))
+	{
+		return false;
+	}
+
+	// See the header for the derivation. Each term is the rotation needed to bring the
+	// map's "up" direction onto the camera's up vector.
+	float Yaw = Calibration.MapYaw;
+	if (Calibration.bSwapUV)
+	{
+		Yaw -= 90.0f;
+	}
+	if (Calibration.bInvertU) // == bInvertV, guaranteed above
+	{
+		Yaw += 180.0f;
+	}
+
+	OutCaptureYaw = NormalizeAngleDegrees(Yaw);
+	return true;
+}
+
+float UMinimapFunctionLibrary::GetCaptureOrthoWidth(const FMinimapCalibration& Calibration)
+{
+	const FVector2D Extent = Calibration.GetZoomedExtent();
+	// Guard: GetZoomedExtent already refuses zero, but a caller may pass a raw struct.
+	return FMath::Max(static_cast<float>(Extent.X * 2.0), 1.0f);
+}
+
+FIntPoint UMinimapFunctionLibrary::ComputeCaptureResolution(const FMinimapCalibration& Calibration, int32 MaxDimension)
+{
+	const int32 ClampedMax = FMath::Clamp(MaxDimension, 16, 8192);
+
+	const FVector2D Extent = Calibration.GetEffectiveExtent();
+	if (Extent.X <= UE_KINDA_SMALL_NUMBER || Extent.Y <= UE_KINDA_SMALL_NUMBER)
+	{
+		return FIntPoint(ClampedMax, ClampedMax);
+	}
+
+	// Match the image aspect to the covered world aspect; anything else stretches.
+	int32 Width;
+	int32 Height;
+	if (Extent.X >= Extent.Y)
+	{
+		Width  = ClampedMax;
+		Height = FMath::RoundToInt(ClampedMax * (Extent.Y / Extent.X));
+	}
+	else
+	{
+		Height = ClampedMax;
+		Width  = FMath::RoundToInt(ClampedMax * (Extent.X / Extent.Y));
+	}
+
+	// Even dimensions keep mip/format handling well behaved on every RHI.
+	auto MakeEven = [](int32 Value) { return (Value % 2 == 0) ? Value : Value + 1; };
+
+	return FIntPoint(
+		MakeEven(FMath::Clamp(Width,  16, 8192)),
+		MakeEven(FMath::Clamp(Height, 16, 8192)));
+}
