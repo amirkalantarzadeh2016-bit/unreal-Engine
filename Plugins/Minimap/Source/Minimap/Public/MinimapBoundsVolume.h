@@ -170,6 +170,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background")
 	TObjectPtr<UTexture2D> StaticMapTexture;
 
+	/** Package path used by Save Capture As Static Texture, e.g. /Game/Minimap/Generated. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background")
+	FString StaticTextureSavePath = TEXT("/Game/Minimap/Generated");
+
+	/** Asset name for the saved texture. Derived from the level name when left empty. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background")
+	FString StaticTextureAssetName;
+
+	/** Switch this instance to Static Texture mode after a successful save. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background")
+	bool bSwitchToStaticAfterSave = true;
+
 	/** Level-specific actors hidden from the minimap capture only (roofs, ceilings). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visibility")
 	TArray<TSoftObjectPtr<AActor>> CaptureExcludedActors;
@@ -206,6 +218,31 @@ public:
 	/** Skip actors with no collision AND no visible geometry contribution. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Fit")
 	bool bFitIgnoreHiddenActors = true;
+
+	// --- Geometry-aware fit ----------------------------------------------
+
+	/**
+	 * Only consider components with at least this bounds volume, in cubic metres.
+	 * Filters out door handles, trim and decals that contribute nothing to the footprint
+	 * but can drag the box outward if one is misplaced.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Fit|Geometry",
+		meta = (ClampMin = "0.0"))
+	float MinComponentVolumeCubicMeters = 0.02f;
+
+	/** Require collision. Architectural elements have it; VFX and helpers usually do not. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Fit|Geometry")
+	bool bGeometryFitRequiresCollision = false;
+
+	/**
+	 * Fraction of total geometry mass trimmed from EACH end of each axis before fitting.
+	 *
+	 * This is what stops one stray mesh a kilometre away from doubling the map. 0.01
+	 * discards the outermost 1% of mass per side; 0 disables trimming and fits everything.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Fit|Geometry",
+		meta = (ClampMin = "0.0", ClampMax = "0.25"))
+	float GeometryOutlierTrim = 0.01f;
 
 	/** Uniform padding added around the fitted result. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Fit",
@@ -305,6 +342,33 @@ public:
 		meta = (DisplayName = "Fit To Level Bounds"))
 	void FitToLevelBounds();
 
+	/**
+	 * Fit tightly to the actual architectural GEOMETRY rather than to every actor's bounds.
+	 *
+	 * Differs from Fit To Level Bounds in three ways:
+	 *  - iterates primitive COMPONENTS with real mesh geometry, not whole actors, so an
+	 *    actor with one distant child component no longer inflates the box;
+	 *  - weights each component by its volume, so a wall counts and a light switch does not;
+	 *  - trims GeometryOutlierTrim of that weighted mass from each end of each axis, so a
+	 *    single stray mesh cannot stretch the map across empty space.
+	 *
+	 * Leaves the existing bounds untouched until you press it.
+	 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap",
+		meta = (DisplayName = "Fit To Geometry (Tight)"))
+	void FitToGeometryBounds();
+
+	/**
+	 * Save the current capture render target as a real UTexture2D asset and switch this
+	 * volume to Static Texture mode using it. Trades runtime capture cost for a baked
+	 * image. Editor only - it creates an asset.
+	 */
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Minimap",
+		meta = (DisplayName = "Save Capture As Static Texture"))
+	void SaveCaptureAsStaticTexture();
+
+
+
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
 
@@ -315,6 +379,12 @@ protected:
 private:
 	/** True when the actor passes the Minimap|Fit filters. */
 	bool PassesFitFilter(const AActor* Actor, const FVector& ActorExtent) const;
+
+#if WITH_EDITOR
+	/** Actor-level half of the fit filters, shared by both fit modes. Editor-only, to
+	 *  match where the fit functions themselves live. */
+	bool PassesActorFitFilters(const AActor* Actor) const;
+#endif
 
 	/** Created lazily; never a default subobject, so nothing is allocated when unused. */
 	UPROPERTY(Transient)

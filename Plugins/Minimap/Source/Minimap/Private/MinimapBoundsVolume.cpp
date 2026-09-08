@@ -2,6 +2,9 @@
 
 #include "Components/BillboardComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
@@ -16,6 +19,8 @@
 
 #if WITH_EDITOR
 #include "EngineUtils.h"
+#include "Engine/Texture2D.h"
+#include "Kismet/KismetRenderingLibrary.h"
 #endif
 
 AMinimapBoundsVolume::AMinimapBoundsVolume()
@@ -720,6 +725,320 @@ void AMinimapBoundsVolume::FitToLevelBounds()
 		TEXT("'%s': fitted to %d actors (%d rejected by filters). Center=%s Extent=%s"),
 		*GetName(), ConsideredActors, RejectedActors,
 		*LevelBounds.GetCenter().ToCompactString(), *NewExtent.ToCompactString());
+}
+
+bool AMinimapBoundsVolume::PassesActorFitFilters(const AActor* Actor) const
+{
+	if (!IsValid(Actor))
+	{
+		return false;
+	}
+
+	if (bFitIgnoreHiddenActors && Actor->IsHidden())
+	{
+		return false;
+	}
+
+	for (const TSubclassOf<AActor>& ExcludedClass : FitExcludeClasses)
+	{
+		if (*ExcludedClass && Actor->IsA(ExcludedClass))
+		{
+			return false;
+		}
+	}
+
+	for (const FName& Tag : FitExcludeTags)
+	{
+		if (!Tag.IsNone() && Actor->ActorHasTag(Tag))
+		{
+			return false;
+		}
+	}
+
+	// An allow-list, when supplied, overrides everything permissive above.
+	if (FitRequireTags.Num() > 0)
+	{
+		for (const FName& Tag : FitRequireTags)
+		{
+			if (!Tag.IsNone() && Actor->ActorHasTag(Tag))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	return true;
+}
+
+void AMinimapBoundsVolume::FitToGeometryBounds()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	// One entry per qualifying primitive component: its world box and how much geometry
+	// mass it represents. Volume is a good enough proxy for "how much of the building is
+	// this" without touching render data.
+	struct FGeometryEntry
+	{
+		FBox Box;
+		double Weight;
+	};
+
+	TArray<FGeometryEntry> Entries;
+	int32 RejectedComponents = 0;
+
+	const double MinVolume = static_cast<double>(MinComponentVolumeCubicMeters) * 1000000.0; // m^3 -> cm^3
+
+	for (TActorIterator<AActor> ActorIt(World); ActorIt; ++ActorIt)
+	{
+		AActor* Actor = *ActorIt;
+		if (!IsValid(Actor) || Actor == this || Actor->IsA<AMinimapBoundsVolume>())
+		{
+			continue;
+		}
+
+		// Actor-level filters still apply, so tags and classes exclude exactly as they do
+		// for the actor-bounds fit. Expressed as a single predicate rather than jumps.
+		if (!PassesActorFitFilters(Actor))
+		{
+			continue;
+		}
+
+		// --- Component level ---------------------------------------------
+		Actor->ForEachComponent<UPrimitiveComponent>(/*bIncludeFromChildActors=*/true,
+			[&](UPrimitiveComponent* Primitive)
+			{
+				if (!IsValid(Primitive) || !Primitive->IsRegistered())
+				{
+					return;
+				}
+
+				// Only things that actually carry architectural geometry. This is the core
+				// of "mass-bearing": a mesh has volume, a light or an audio emitter does not.
+				const bool bIsMesh = Primitive->IsA<UStaticMeshComponent>() || Primitive->IsA<USkeletalMeshComponent>();
+				if (!bIsMesh)
+				{
+					++RejectedComponents;
+					return;
+				}
+
+				if (bGeometryFitRequiresCollision &&
+				    Primitive->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+				{
+					++RejectedComponents;
+					return;
+				}
+
+				const FBoxSphereBounds ComponentBounds = Primitive->Bounds;
+				const FVector Extent = ComponentBounds.BoxExtent;
+				if (Extent.IsNearlyZero())
+				{
+					++RejectedComponents;
+					return;
+				}
+
+				// Guard against a single component with absurd bounds (sky spheres,
+				// unbounded effects) before it can dominate the weighting.
+				if (FitMaxActorExtent > 0.0f &&
+				    (Extent.X > FitMaxActorExtent || Extent.Y > FitMaxActorExtent))
+				{
+					++RejectedComponents;
+					return;
+				}
+
+				const double Volume = 8.0 * Extent.X * Extent.Y * Extent.Z;
+				if (Volume < MinVolume)
+				{
+					++RejectedComponents;
+					return;
+				}
+
+				FGeometryEntry Entry;
+				Entry.Box = FBox(ComponentBounds.Origin - Extent, ComponentBounds.Origin + Extent);
+				Entry.Weight = Volume;
+				Entries.Add(Entry);
+			});
+	}
+
+	if (Entries.Num() == 0)
+	{
+		UE_LOG(LogMinimap, Warning,
+			TEXT("'%s': Fit To Geometry found no qualifying mesh components (%d rejected). "
+			     "Lower Min Component Volume, or turn off Requires Collision."),
+			*GetName(), RejectedComponents);
+		return;
+	}
+
+	// --- Weighted outlier trim -------------------------------------------
+	// Sort by centre along an axis, walk the cumulative weight, and take the value where
+	// the trim fraction is crossed at each end. Weighting by volume means the result
+	// follows where the building actually is, not where the most objects happen to be.
+	double TotalWeight = 0.0;
+	for (const FGeometryEntry& Entry : Entries)
+	{
+		TotalWeight += Entry.Weight;
+	}
+
+	const double Trim = FMath::Clamp(static_cast<double>(GeometryOutlierTrim), 0.0, 0.25);
+
+	auto WeightedRange = [&Entries, TotalWeight, Trim](int32 Axis, double& OutMin, double& OutMax)
+	{
+		TArray<FGeometryEntry> Sorted = Entries;
+		Sorted.Sort([Axis](const FGeometryEntry& A, const FGeometryEntry& B)
+		{
+			return A.Box.GetCenter()[Axis] < B.Box.GetCenter()[Axis];
+		});
+
+		const double LowTarget  = TotalWeight * Trim;
+		const double HighTarget = TotalWeight * (1.0 - Trim);
+
+		double Accumulated = 0.0;
+		OutMin = Sorted[0].Box.Min[Axis];
+		OutMax = Sorted.Last().Box.Max[Axis];
+
+		bool bFoundLow = (Trim <= 0.0);
+		for (const FGeometryEntry& Entry : Sorted)
+		{
+			const double Before = Accumulated;
+			Accumulated += Entry.Weight;
+
+			if (!bFoundLow && Accumulated >= LowTarget)
+			{
+				// Keep this component whole: trimming should exclude outliers, never
+				// slice through a wall that survived the cut.
+				OutMin = Entry.Box.Min[Axis];
+				bFoundLow = true;
+			}
+			if (Before < HighTarget && Accumulated >= HighTarget)
+			{
+				OutMax = Entry.Box.Max[Axis];
+			}
+		}
+	};
+
+	double MinX, MaxX, MinY, MaxY;
+	WeightedRange(0, MinX, MaxX);
+	WeightedRange(1, MinY, MaxY);
+
+	// Z is not trimmed: a roof or a basement is legitimately part of the building, and the
+	// Z range only feeds height filtering and the capture camera.
+	FBox FullZ(ForceInit);
+	for (const FGeometryEntry& Entry : Entries)
+	{
+		FullZ += Entry.Box;
+	}
+
+	FBox Fitted(FVector(MinX, MinY, FullZ.Min.Z), FVector(MaxX, MaxY, FullZ.Max.Z));
+	if (!Fitted.IsValid || Fitted.GetExtent().X < 1.0 || Fitted.GetExtent().Y < 1.0)
+	{
+		UE_LOG(LogMinimap, Warning,
+			TEXT("'%s': Fit To Geometry produced a degenerate box; volume unchanged."), *GetName());
+		return;
+	}
+
+	Modify();
+	if (IsValid(BoundsBox))
+	{
+		BoundsBox->Modify();
+	}
+
+	SetActorRotation(FRotator::ZeroRotator);
+	SetActorScale3D(FVector::OneVector);
+	SetActorLocation(Fitted.GetCenter());
+
+	FVector NewExtent = Fitted.GetExtent();
+	NewExtent.X += FitPadding;
+	NewExtent.Y += FitPadding;
+	BoundsBox->SetBoxExtent(NewExtent, /*bUpdateOverlaps=*/false);
+
+	const FBox Untrimmed = [&Entries]()
+	{
+		FBox Box(ForceInit);
+		for (const FGeometryEntry& Entry : Entries) { Box += Entry.Box; }
+		return Box;
+	}();
+
+	UE_LOG(LogMinimap, Log,
+		TEXT("'%s': fitted to geometry. %d components kept, %d rejected. "
+		     "Trimmed extent %s vs untrimmed %s (%.0f%% smaller on X, %.0f%% on Y)."),
+		*GetName(), Entries.Num(), RejectedComponents,
+		*NewExtent.ToCompactString(), *Untrimmed.GetExtent().ToCompactString(),
+		100.0 * (1.0 - NewExtent.X / FMath::Max(Untrimmed.GetExtent().X, 1.0)),
+		100.0 * (1.0 - NewExtent.Y / FMath::Max(Untrimmed.GetExtent().Y, 1.0)));
+}
+
+void AMinimapBoundsVolume::SaveCaptureAsStaticTexture()
+{
+	UMinimapCaptureComponent* Capture = IsValid(CaptureComponent) ? CaptureComponent.Get() : nullptr;
+	if (!Capture || !Capture->GetMinimapRenderTarget())
+	{
+		UE_LOG(LogMinimap, Warning,
+			TEXT("'%s': nothing to save - press Capture Preview Now first so a render target exists."),
+			*GetName());
+		return;
+	}
+
+	if (Capture->GetCaptureCallCount() == 0)
+	{
+		UE_LOG(LogMinimap, Warning,
+			TEXT("'%s': the render target has never been captured into; saving it would bake a "
+			     "blank image. Press Capture Preview Now first."), *GetName());
+		return;
+	}
+
+	FString AssetName = StaticTextureAssetName;
+	if (AssetName.IsEmpty())
+	{
+		// Per-level default, so two levels cannot silently overwrite each other's map.
+		const FString LevelName = GetWorld() ? GetWorld()->GetMapName() : TEXT("Level");
+		AssetName = FString::Printf(TEXT("T_Minimap_%s"), *LevelName);
+	}
+
+	FString PackagePath = StaticTextureSavePath;
+	PackagePath.RemoveFromEnd(TEXT("/"));
+	const FString FullName = FString::Printf(TEXT("%s/%s"), *PackagePath, *AssetName);
+
+	// Bakes the render target into a real UTexture2D asset. Editor only by nature - it
+	// creates a package. VectorDisplacementmap keeps the pixels unaltered, which matters
+	// for a map: a lossy compression setting would smear thin architectural lines.
+	UTexture2D* Baked = UKismetRenderingLibrary::RenderTargetCreateStaticTexture2DEditorOnly(
+		Capture->GetMinimapRenderTarget(),
+		FullName,
+		TextureCompressionSettings::TC_Default,
+		TextureMipGenSettings::TMGS_NoMipmaps);
+
+	if (!Baked)
+	{
+		UE_LOG(LogMinimap, Error,
+			TEXT("'%s': failed to create a static texture at '%s'. Check the path is a valid "
+			     "content directory."), *GetName(), *FullName);
+		return;
+	}
+
+	Modify();
+	StaticMapTexture = Baked;
+
+	if (bSwitchToStaticAfterSave)
+	{
+		// Switching source is the point of the workflow, but only ever on the per-instance
+		// override, never on a shared preset that other levels also use.
+		bOverridePresetCaptureSettings = true;
+		CaptureSettingsOverride.BackgroundSource = EMinimapBackgroundSource::StaticTexture;
+
+		if (UMinimapSubsystem* Subsystem = UMinimapSubsystem::Get(this))
+		{
+			Subsystem->SetStaticBackgroundTexture(Baked);
+		}
+	}
+
+	UE_LOG(LogMinimap, Log,
+		TEXT("'%s': saved capture as static texture '%s'%s"),
+		*GetName(), *Baked->GetPathName(),
+		bSwitchToStaticAfterSave ? TEXT(" and switched Background Source to Static Texture.") : TEXT("."));
 }
 
 void AMinimapBoundsVolume::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)

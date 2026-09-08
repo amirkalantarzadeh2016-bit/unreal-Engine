@@ -140,6 +140,94 @@ public:
 	FOnMinimapViewActorChanged OnViewActorChanged;
 
 	// ---------------------------------------------------------------------
+	// Smoothing: compass "float" and zoom easing
+	//
+	// Both run on this component's own tick, which enables itself only while a value is
+	// still settling and disables again once it arrives - so the resting cost is zero and
+	// the system keeps its "no per-frame work" property.
+	// ---------------------------------------------------------------------
+
+	/** Let the compass lag behind the view, giving the indicators a floating feel. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass")
+	bool bSmoothCompass = true;
+
+	/**
+	 * Higher converges faster and feels stiffer; lower floats more. 6-10 reads as a
+	 * pleasant lag, below 3 feels sluggish.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass",
+		meta = (EditCondition = "bSmoothCompass", ClampMin = "0.1", UIMin = "1.0", UIMax = "20.0"))
+	float CompassInterpSpeed = 7.0f;
+
+	/** Below this the compass snaps, so it cannot creep forever at sub-pixel amounts. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass",
+		meta = (EditCondition = "bSmoothCompass", ClampMin = "0.001", Units = "deg"))
+	float CompassSettleTolerance = 0.05f;
+
+	/** Ease zoom changes instead of snapping. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Zoom")
+	bool bSmoothZoom = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Zoom",
+		meta = (EditCondition = "bSmoothZoom", ClampMin = "0.1", UIMin = "1.0", UIMax = "20.0"))
+	float ZoomInterpSpeed = 8.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Zoom",
+		meta = (ClampMin = "0.05", UIMin = "0.1", UIMax = "4.0"))
+	float MinZoomMultiplier = 0.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Zoom",
+		meta = (ClampMin = "0.05", UIMin = "0.5", UIMax = "16.0"))
+	float MaxZoomMultiplier = 4.0f;
+
+	/** Multiplicative step per ZoomIn/ZoomOut call. 1.25 = 25% per press. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Zoom",
+		meta = (ClampMin = "1.01", UIMin = "1.05", UIMax = "2.0"))
+	float ZoomStep = 1.25f;
+
+	/**
+	 * Compass angle in degrees, already smoothed. Feed this straight into
+	 * SetRenderTransformAngle. Equals GetCompassAngle() when smoothing is off.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Compass")
+	float GetSmoothedCompassAngle() const { return bSmoothCompass ? SmoothedCompassAngle : GetCompassAngle(); }
+
+	/**
+	 * Screen angle for one cardinal indicator, in degrees clockwise from up, using the
+	 * smoothed compass. Index 0 = North, 1 = East, 2 = South, 3 = West.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Compass")
+	float GetCardinalScreenAngle(int32 CardinalIndex) const;
+
+	/**
+	 * Position for a cardinal indicator on a ring of the given radius, relative to the
+	 * ring centre, in slate units. Y is screen-down, ready for a canvas slot offset.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Compass")
+	FVector2D GetCardinalRingOffset(int32 CardinalIndex, float RingRadius) const;
+
+	/** Set the zoom target. Eases toward it when bSmoothZoom is on, else snaps. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void SetZoomTarget(float NewZoom);
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void ZoomIn();
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void ZoomOut();
+
+	/** 0 = fully zoomed out, 1 = fully zoomed in. Handy for driving a slider. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Zoom")
+	float GetZoomAlpha() const;
+
+	/** Set zoom from a normalized 0..1 slider value. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void SetZoomAlpha(float Alpha);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Zoom")
+	float GetZoomTarget() const { return TargetZoomMultiplier; }
+
+	// ---------------------------------------------------------------------
 	// Public API
 	// ---------------------------------------------------------------------
 
@@ -236,6 +324,10 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	/** Turn the tick on while something is still easing, off once everything has settled. */
+	void UpdateSmoothingTickState();
 
 private:
 	/** Full resolution path including the world lookups the static helper cannot do. */
@@ -266,4 +358,11 @@ private:
 	bool bRegistered = false;
 	bool bRenderingEnabled = true;
 	bool bStateInitialized = false;
+
+	/** Compass angle currently displayed; chases GetCompassAngle(). */
+	float SmoothedCompassAngle = 0.0f;
+	bool bCompassInitialized = false;
+
+	/** Zoom currently displayed; chases TargetZoomMultiplier. */
+	float TargetZoomMultiplier = 1.0f;
 };

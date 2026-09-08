@@ -4,6 +4,8 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "MinimapCaptureTypes.h"
 #include "MinimapTypes.h"
+
+class UTexture2D;
 #include "MinimapFunctionLibrary.generated.h"
 
 /**
@@ -224,6 +226,27 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "Minimap|Capture")
 	static float GetCaptureOrthoWidth(const FMinimapCalibration& Calibration);
+
+	// ---------------------------------------------------------------------
+	// Asset loading
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Load a texture that ships inside the plugin's own Content folder.
+	 *
+	 * Pass a path relative to the plugin content root, e.g. "Textures/T_MapPlaceholder";
+	 * it resolves against the "/Minimap/" mount point the plugin declares via
+	 * CanContainContent. Returns null and logs if the asset is missing, so a stale path
+	 * cannot silently produce a blank map.
+	 *
+	 * Synchronous load - call it at setup time, not per frame.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Assets")
+	static UTexture2D* LoadPluginTexture(const FString& RelativePath);
+
+	/** Load any texture by full object path, plugin or project. Null and a log on failure. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Assets")
+	static UTexture2D* LoadTextureByPath(const FString& FullObjectPath);
 
 	/**
 	 * Render-target size whose aspect matches the effective extent, with the longest edge

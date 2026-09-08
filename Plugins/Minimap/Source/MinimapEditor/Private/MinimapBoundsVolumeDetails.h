@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "IDetailCustomization.h"
+#include "Input/Reply.h"
+#include "Widgets/SBoxPanel.h"
 #include "UObject/WeakObjectPtr.h"
 
 class AMinimapBoundsVolume;
@@ -38,7 +40,17 @@ private:
 
 	AMinimapBoundsVolume* GetVolume() const { return CustomizedVolume.Get(); }
 
+	/** Single definition of a plugin action button, so every one looks identical. */
+	static SHorizontalBox::FSlot::FSlotArguments MakeActionSlot(
+		const FText& Label, const FText& Tooltip, FOnClicked OnClicked);
+
+	/** Labelled divider that groups the action bars into sections. */
+	static void AddSectionHeading(class IDetailCategoryBuilder& Category, const FText& Heading);
+
 	FReply OnCaptureClicked();
+	FReply OnBakeStaticClicked();
+	FReply OnFitGeometryClicked();
+	FReply OnFitActorsClicked();
 	FReply OnValidateClicked();
 
 	/** Rebuild a brush when the underlying texture changes identity. */

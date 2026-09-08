@@ -1,5 +1,6 @@
 #include "MinimapFunctionLibrary.h"
 
+#include "Engine/Texture2D.h"
 #include "MinimapModule.h"
 
 // ---------------------------------------------------------------------------
@@ -369,4 +370,58 @@ FIntPoint UMinimapFunctionLibrary::ComputeCaptureResolution(const FMinimapCalibr
 	return FIntPoint(
 		MakeEven(FMath::Clamp(Width,  16, 8192)),
 		MakeEven(FMath::Clamp(Height, 16, 8192)));
+}
+
+
+// ---------------------------------------------------------------------------
+// Asset loading
+// ---------------------------------------------------------------------------
+
+UTexture2D* UMinimapFunctionLibrary::LoadPluginTexture(const FString& RelativePath)
+{
+	if (RelativePath.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// "/Minimap/" is the mount point the plugin gets from CanContainContent in the
+	// descriptor. Accept a path with or without a leading slash so both read naturally.
+	FString Trimmed = RelativePath;
+	Trimmed.RemoveFromStart(TEXT("/"));
+
+	const FString FullPath = FString::Printf(TEXT("/Minimap/%s"), *Trimmed);
+	return LoadTextureByPath(FullPath);
+}
+
+UTexture2D* UMinimapFunctionLibrary::LoadTextureByPath(const FString& FullObjectPath)
+{
+	if (FullObjectPath.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// A package path without an object name ("/X/Y/T_Map") needs the ".T_Map" suffix to
+	// address the object rather than the package. Add it when it is missing.
+	FString ObjectPath = FullObjectPath;
+	if (!ObjectPath.Contains(TEXT(".")))
+	{
+		FString AssetName;
+		ObjectPath.Split(TEXT("/"), nullptr, &AssetName, ESearchCase::IgnoreCase, ESearchDir::FromEnd);
+		if (!AssetName.IsEmpty())
+		{
+			ObjectPath = FString::Printf(TEXT("%s.%s"), *ObjectPath, *AssetName);
+		}
+	}
+
+	UTexture2D* Texture = Cast<UTexture2D>(
+		StaticLoadObject(UTexture2D::StaticClass(), nullptr, *ObjectPath));
+
+	if (!Texture)
+	{
+		UE_LOG(LogMinimap, Warning,
+			TEXT("LoadTextureByPath: could not load a UTexture2D at '%s'. Check the path, and that "
+			     "the plugin's Content folder is present and cooked for this build."), *ObjectPath);
+	}
+
+	return Texture;
 }

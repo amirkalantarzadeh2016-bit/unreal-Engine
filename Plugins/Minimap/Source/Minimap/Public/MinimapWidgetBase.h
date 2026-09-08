@@ -55,6 +55,43 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Minimap", meta = (BindWidgetOptional))
 	TObjectPtr<UWidget> North_Container;
 
+	/**
+	 * Cardinal indicators. All optional - bind whichever you add.
+	 *
+	 * "North_Container" is the existing binding and keeps working unchanged. Add
+	 * South/East/West_Container to get the full set. The base class drives their rotation
+	 * (and optionally their position on a ring) from the view's SMOOTHED compass angle, so
+	 * they float rather than snapping.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Compass", meta = (BindWidgetOptional))
+	TObjectPtr<UWidget> South_Container;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Compass", meta = (BindWidgetOptional))
+	TObjectPtr<UWidget> East_Container;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Compass", meta = (BindWidgetOptional))
+	TObjectPtr<UWidget> West_Container;
+
+	/**
+	 * Move the indicators around a ring as the compass turns, instead of only spinning
+	 * them in place. Requires each indicator to sit in a Canvas Panel.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass")
+	bool bOrbitCardinalIndicators = false;
+
+	/** Ring radius in slate units, used when orbiting. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass",
+		meta = (EditCondition = "bOrbitCardinalIndicators", ClampMin = "0.0"))
+	float CardinalRingRadius = 110.0f;
+
+	/**
+	 * Keep the icons upright while they orbit. Off means each icon also spins, which is
+	 * what you want for an arrow and not for a letter.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass",
+		meta = (EditCondition = "bOrbitCardinalIndicators"))
+	bool bKeepCardinalIconsUpright = true;
+
 	/** Canvas that pooled marker widgets are parented to. Add one named "MarkerCanvas". */
 	UPROPERTY(BlueprintReadOnly, Category = "Minimap", meta = (BindWidgetOptional))
 	TObjectPtr<UCanvasPanel> MarkerCanvas;
@@ -201,6 +238,32 @@ public:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Minimap|Effects")
 	void HandlePopEffect(bool bPlayForward);
 
+	/**
+	 * Drive every bound cardinal indicator from the view's smoothed compass angle.
+	 * Called automatically each frame while smoothing is active; safe to call manually.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Compass")
+	void UpdateCardinalIndicators();
+
+	/** Smoothed compass angle, or 0 with no view bound. Bind this in Blueprint if you
+	 *  would rather drive the indicators yourself. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Compass")
+	float GetSmoothedCompassAngle() const;
+
+	// --- Zoom passthroughs, so Blueprint can bind buttons without reaching for the view --
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void ZoomIn();
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void ZoomOut();
+
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
+	void SetZoomAlpha(float Alpha);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Zoom")
+	float GetZoomAlpha() const;
+
 	/** Called after the native update each pass, for extra Blueprint-side presentation. */
 	UFUNCTION(BlueprintImplementableEvent, Category = "Minimap|Events")
 	void OnMinimapUpdated(const TArray<FMinimapMarkerSnapshot>& Snapshots);
@@ -208,6 +271,15 @@ public:
 protected:
 	virtual void NativeConstruct() override;
 	virtual void NativeDestruct() override;
+
+	/**
+	 * Only drives the compass smoothing. Everything else - markers, background, material
+	 * scalars - remains event-driven off the subsystem's batched update.
+	 */
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
+
+	/** Apply angle (and optionally ring position) to one indicator. */
+	void ApplyCardinalTransform(UWidget* Indicator, int32 CardinalIndex);
 
 	/** Bound to the view's update delegate; this is the widget's only per-update work. */
 	UFUNCTION()

@@ -14,6 +14,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SSeparator.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 
@@ -160,33 +161,67 @@ void FMinimapBoundsVolumeDetails::CustomizeDetails(IDetailLayoutBuilder& DetailB
 
 	TWeakObjectPtr<AMinimapBoundsVolume> WeakVolume = CustomizedVolume;
 
-	// --- Buttons -----------------------------------------------------------
-	Category.AddCustomRow(LOCTEXT("PreviewActions", "Preview Actions"))
+	// --- Action bars -------------------------------------------------------
+	// One visual language for every plugin action: same button construction, same
+	// padding, same grouping rhythm, a labelled heading per group and a tooltip on
+	// everything. Grouped by what the action DOES, so the panel reads as one tool.
+	AddSectionHeading(Category, LOCTEXT("GroupCapture", "Capture"));
+
+	Category.AddCustomRow(LOCTEXT("CaptureActions", "Capture Actions"))
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.Padding(0.0f, 4.0f, 6.0f, 4.0f)
-		[
-			SNew(SButton)
-			.Text(LOCTEXT("CaptureNow", "Capture / Refresh Now"))
-			.ToolTipText(LOCTEXT("CaptureNowTip",
-				"Render the scene capture and update the preview below.\n"
+		+ MakeActionSlot(
+			LOCTEXT("CaptureNow", "Capture / Refresh"),
+			LOCTEXT("CaptureNowTip",
+				"Render the scene capture and update the preview below.\n\n"
 				"Works in the editor without entering PIE, and does NOT change Background Source "
-				"or overwrite the configured static texture."))
-			.OnClicked(this, &FMinimapBoundsVolumeDetails::OnCaptureClicked)
-		]
-		+ SHorizontalBox::Slot()
-		.AutoWidth()
-		.Padding(0.0f, 4.0f)
-		[
-			SNew(SButton)
-			.Text(LOCTEXT("ValidateNow", "Validate Setup"))
-			.ToolTipText(LOCTEXT("ValidateNowTip",
-				"Run the full setup validation and write the pipeline report to LogMinimap."))
-			.OnClicked(this, &FMinimapBoundsVolumeDetails::OnValidateClicked)
-		]
+				"or overwrite the configured static texture."),
+			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnCaptureClicked))
+		+ MakeActionSlot(
+			LOCTEXT("SaveStatic", "Bake To Static Texture"),
+			LOCTEXT("SaveStaticTip",
+				"Save the current capture as a real UTexture2D asset and switch this volume to "
+				"Static Texture mode.\n\n"
+				"Trades runtime capture cost for a baked image. Capture at least once first."),
+			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnBakeStaticClicked))
+	];
+
+	AddSectionHeading(Category, LOCTEXT("GroupBounds", "Bounds"));
+
+	Category.AddCustomRow(LOCTEXT("BoundsActions", "Bounds Actions"))
+	.WholeRowContent()
+	[
+		SNew(SHorizontalBox)
+		+ MakeActionSlot(
+			LOCTEXT("FitGeometry", "Fit To Geometry"),
+			LOCTEXT("FitGeometryTip",
+				"Fit the bounds tightly to the actual architectural meshes.\n\n"
+				"Weights each mesh component by volume and trims outliers, so empty space and "
+				"stray distant objects no longer inflate the map.\n\n"
+				"CHANGES YOUR CALIBRATION - markers and image both move."),
+			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnFitGeometryClicked))
+		+ MakeActionSlot(
+			LOCTEXT("FitActors", "Fit To All Actors"),
+			LOCTEXT("FitActorsTip",
+				"The original, looser fit: unions every eligible actor's bounds.\n\n"
+				"CHANGES YOUR CALIBRATION - markers and image both move."),
+			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnFitActorsClicked))
+	];
+
+	AddSectionHeading(Category, LOCTEXT("GroupDiagnostics", "Diagnostics"));
+
+	Category.AddCustomRow(LOCTEXT("DiagActions", "Diagnostic Actions"))
+	.WholeRowContent()
+	[
+		SNew(SHorizontalBox)
+		+ MakeActionSlot(
+			LOCTEXT("ValidateNow", "Validate Setup"),
+			LOCTEXT("ValidateNowTip",
+				"Check the whole setup and write a staged pipeline report to LogMinimap, "
+				"including a read-back verdict on whether the render target actually contains "
+				"an image."),
+			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnValidateClicked))
 	];
 
 	// --- Static preview ----------------------------------------------------
@@ -257,6 +292,75 @@ FReply FMinimapBoundsVolumeDetails::OnCaptureClicked()
 
 		// The render target object identity does not change between captures, so the
 		// existing brush already points at the refreshed pixels; nothing to invalidate.
+	}
+	return FReply::Handled();
+}
+
+SHorizontalBox::FSlot::FSlotArguments FMinimapBoundsVolumeDetails::MakeActionSlot(
+	const FText& Label, const FText& Tooltip, FOnClicked OnClicked)
+{
+	// Single definition of what a plugin button looks like, so every action in the panel
+	// is identical in size, padding and behaviour.
+	return MoveTemp(*SHorizontalBox::Slot()
+		.AutoWidth()
+		.Padding(0.0f, 3.0f, 6.0f, 3.0f)
+		[
+			SNew(SButton)
+			.Text(Label)
+			.ToolTipText(Tooltip)
+			.HAlign(HAlign_Center)
+			.ContentPadding(FMargin(10.0f, 4.0f))
+			.OnClicked(OnClicked)
+		]);
+}
+
+void FMinimapBoundsVolumeDetails::AddSectionHeading(IDetailCategoryBuilder& Category, const FText& Heading)
+{
+	Category.AddCustomRow(Heading)
+	.WholeRowContent()
+	[
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0.0f, 8.0f, 0.0f, 2.0f)
+		[
+			SNew(STextBlock)
+			.Text(Heading)
+			.Font(IDetailLayoutBuilder::GetDetailFontBold())
+			.ColorAndOpacity(FSlateColor(FLinearColor(0.62f, 0.68f, 0.78f)))
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			SNew(SSeparator).Thickness(1.0f)
+		]
+	];
+}
+
+FReply FMinimapBoundsVolumeDetails::OnBakeStaticClicked()
+{
+	if (AMinimapBoundsVolume* Volume = GetVolume())
+	{
+		Volume->SaveCaptureAsStaticTexture();
+	}
+	return FReply::Handled();
+}
+
+FReply FMinimapBoundsVolumeDetails::OnFitGeometryClicked()
+{
+	if (AMinimapBoundsVolume* Volume = GetVolume())
+	{
+		Volume->FitToGeometryBounds();
+		Volume->ApplyCalibration();
+	}
+	return FReply::Handled();
+}
+
+FReply FMinimapBoundsVolumeDetails::OnFitActorsClicked()
+{
+	if (AMinimapBoundsVolume* Volume = GetVolume())
+	{
+		Volume->FitBoundsAndRefresh();
 	}
 	return FReply::Handled();
 }

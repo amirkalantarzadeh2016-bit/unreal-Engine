@@ -10,8 +10,11 @@
 
 UMinimapViewComponent::UMinimapViewComponent()
 {
-	// The subsystem owns the only tick in this system.
-	PrimaryComponentTick.bCanEverTick = false;
+	// The subsystem owns the only *recurring* tick. This component's tick exists solely to
+	// ease the compass and zoom, and switches itself off the moment both have settled, so
+	// at rest the system still does no per-frame work.
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
 	SetIsReplicatedByDefault(false);
 }
 
@@ -23,6 +26,11 @@ void UMinimapViewComponent::BeginPlay()
 	{
 		RegisterView();
 	}
+
+	// Start settled rather than easing in from zero on the first frame.
+	TargetZoomMultiplier = ZoomMultiplier;
+	SmoothedCompassAngle = GetCompassAngle();
+	bCompassInitialized = true;
 }
 
 void UMinimapViewComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -111,12 +119,14 @@ void UMinimapViewComponent::SetOrientationMode(EMinimapOrientationMode NewMode)
 
 void UMinimapViewComponent::SetZoomMultiplier(float NewZoom)
 {
-	const float Clamped = FMath::Max(NewZoom, 0.01f);
+	// Immediate set. SetZoomTarget is the eased entry point.
+	const float Clamped = FMath::Clamp(NewZoom, MinZoomMultiplier, MaxZoomMultiplier);
 	if (!FMath::IsNearlyEqual(ZoomMultiplier, Clamped))
 	{
 		ZoomMultiplier = Clamped;
-		bStateInitialized = false;
+		bStateInitialized = false; // Force the projection context to rebuild.
 	}
+	TargetZoomMultiplier = Clamped;
 }
 
 void UMinimapViewComponent::SetExplicitViewActor(AActor* NewViewActor)
@@ -332,10 +342,153 @@ bool UMinimapViewComponent::RefreshViewState(const FMinimapCalibration& Calibrat
 	bStateInitialized = true;
 
 	OnViewTransformChanged.Broadcast(this, Anchor, ViewYaw);
+
+	// The view moved, so the compass has a new target to chase.
+	UpdateSmoothingTickState();
+
 	return true;
 }
 
 void UMinimapViewComponent::BroadcastViewUpdated()
 {
 	OnMinimapViewUpdated.Broadcast(this, Snapshots);
+}
+
+
+// ---------------------------------------------------------------------------
+// Compass smoothing and zoom easing
+// ---------------------------------------------------------------------------
+
+void UMinimapViewComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	bool bStillEasing = false;
+
+	// --- Compass ----------------------------------------------------------
+	if (bSmoothCompass)
+	{
+		const float TargetAngle = GetCompassAngle();
+
+		if (!bCompassInitialized)
+		{
+			SmoothedCompassAngle = TargetAngle;
+			bCompassInitialized = true;
+		}
+		else
+		{
+			// Interpolate the shortest signed DELTA, not the raw angles: lerping 179 -> -179
+			// directly would spin the indicator all the way round instead of 2 degrees.
+			const float Delta = FRotator::NormalizeAxis(TargetAngle - SmoothedCompassAngle);
+
+			if (FMath::Abs(Delta) > CompassSettleTolerance)
+			{
+				const float Alpha = FMath::Clamp(DeltaTime * CompassInterpSpeed, 0.0f, 1.0f);
+				SmoothedCompassAngle = FRotator::NormalizeAxis(SmoothedCompassAngle + Delta * Alpha);
+				bStillEasing = true;
+			}
+			else
+			{
+				SmoothedCompassAngle = TargetAngle;
+			}
+		}
+	}
+
+	// --- Zoom -------------------------------------------------------------
+	if (bSmoothZoom && !FMath::IsNearlyEqual(ZoomMultiplier, TargetZoomMultiplier, 0.001f))
+	{
+		const float NewZoom = FMath::FInterpTo(ZoomMultiplier, TargetZoomMultiplier, DeltaTime, ZoomInterpSpeed);
+
+		ZoomMultiplier = FMath::Clamp(NewZoom, MinZoomMultiplier, MaxZoomMultiplier);
+
+		// The projection context caches 1/extent, so it must rebuild for the new zoom.
+		bStateInitialized = false;
+		bStillEasing = true;
+	}
+
+	if (!bStillEasing)
+	{
+		SetComponentTickEnabled(false);
+	}
+}
+
+void UMinimapViewComponent::UpdateSmoothingTickState()
+{
+	// Only ever turns the tick ON; TickComponent turns it off once everything settles.
+	if (!IsValid(this) || !GetOwner())
+	{
+		return;
+	}
+
+	const bool bZoomPending = bSmoothZoom && !FMath::IsNearlyEqual(ZoomMultiplier, TargetZoomMultiplier, 0.001f);
+	const bool bCompassPending = bSmoothCompass;
+
+	if (bZoomPending || bCompassPending)
+	{
+		SetComponentTickEnabled(true);
+	}
+}
+
+float UMinimapViewComponent::GetCardinalScreenAngle(int32 CardinalIndex) const
+{
+	// 0 = N, 1 = E, 2 = S, 3 = W. Each cardinal sits 90 degrees further round the ring,
+	// and the whole ring carries the smoothed compass angle.
+	const float BaseAngle = 90.0f * static_cast<float>(((CardinalIndex % 4) + 4) % 4);
+	return FRotator::NormalizeAxis(BaseAngle + GetSmoothedCompassAngle());
+}
+
+FVector2D UMinimapViewComponent::GetCardinalRingOffset(int32 CardinalIndex, float RingRadius) const
+{
+	const float AngleDegrees = GetCardinalScreenAngle(CardinalIndex);
+	const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
+
+	// 0 degrees = up. Screen Y grows downward, hence the negated cosine.
+	return FVector2D(
+		RingRadius * FMath::Sin(AngleRadians),
+		-RingRadius * FMath::Cos(AngleRadians));
+}
+
+void UMinimapViewComponent::SetZoomTarget(float NewZoom)
+{
+	const float Clamped = FMath::Clamp(NewZoom, MinZoomMultiplier, MaxZoomMultiplier);
+	if (FMath::IsNearlyEqual(TargetZoomMultiplier, Clamped, 0.0001f))
+	{
+		return;
+	}
+
+	TargetZoomMultiplier = Clamped;
+
+	if (!bSmoothZoom)
+	{
+		SetZoomMultiplier(Clamped);
+		return;
+	}
+
+	UpdateSmoothingTickState();
+}
+
+void UMinimapViewComponent::ZoomIn()
+{
+	SetZoomTarget(TargetZoomMultiplier * FMath::Max(ZoomStep, 1.01f));
+}
+
+void UMinimapViewComponent::ZoomOut()
+{
+	SetZoomTarget(TargetZoomMultiplier / FMath::Max(ZoomStep, 1.01f));
+}
+
+float UMinimapViewComponent::GetZoomAlpha() const
+{
+	const float Range = MaxZoomMultiplier - MinZoomMultiplier;
+	if (Range <= UE_KINDA_SMALL_NUMBER)
+	{
+		return 0.0f;
+	}
+	return FMath::Clamp((TargetZoomMultiplier - MinZoomMultiplier) / Range, 0.0f, 1.0f);
+}
+
+void UMinimapViewComponent::SetZoomAlpha(float Alpha)
+{
+	const float Clamped = FMath::Clamp(Alpha, 0.0f, 1.0f);
+	SetZoomTarget(FMath::Lerp(MinZoomMultiplier, MaxZoomMultiplier, Clamped));
 }

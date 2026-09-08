@@ -413,7 +413,64 @@ so a batch of furniture edits costs one render rather than one per item.
 
 ---
 
-## 9. Test coverage
+## 9. Compass, zoom and asset workflow
+
+### Cardinal indicators with a floating lag
+
+`UMinimapViewComponent` smooths the compass toward `-ViewYaw`, interpolating the shortest
+signed **delta** rather than the raw angles — lerping 179° → −179° directly would spin the
+indicator the long way round instead of 2°.
+
+```
+bSmoothCompass       (default on)
+CompassInterpSpeed   (default 7)   higher = stiffer, lower = more float
+```
+
+Bind any of `North_Container`, `South_Container`, `East_Container`, `West_Container` and
+`UMinimapWidgetBase` drives them. `bOrbitCardinalIndicators` moves them around a ring of
+`CardinalRingRadius` instead of spinning them in place; `bKeepCardinalIconsUpright` keeps
+letters readable while they orbit.
+
+Blueprint alternative: bind `GetSmoothedCompassAngle()` or `GetCardinalScreenAngle(i)` /
+`GetCardinalRingOffset(i, radius)` and do the layout yourself.
+
+### Zoom
+
+`ZoomIn()` / `ZoomOut()` / `SetZoomAlpha(0..1)` / `GetZoomAlpha()` on both the view
+component and the widget. Eased in C++ via `FInterpTo` toward a target, clamped to
+`MinZoomMultiplier`..`MaxZoomMultiplier`.
+
+**Ticking:** the view component's tick enables itself only while the compass or zoom is
+still settling and disables again once both arrive, so the resting cost stays zero. The
+widget's `NativeTick` does nothing but the compass smoothing — it has to run at frame rate
+or the float looks stepped at the subsystem's 30 Hz.
+
+### Geometry-aware bounds
+
+**Fit To Geometry (Tight)** is a separate button from Fit To Level Bounds and leaves your
+current calibration alone until you press it. It differs in three ways:
+
+- iterates primitive **components** with real mesh geometry, so an actor with one distant
+  child component no longer inflates the box;
+- **weights each component by its bounds volume**, so a wall counts and a light switch does not;
+- **trims `GeometryOutlierTrim`** (default 1%) of that weighted mass from each end of each
+  axis, so one stray mesh cannot stretch the map across empty space.
+
+Z is deliberately not trimmed: a roof or basement is legitimately part of the building.
+Trimming also never slices through a surviving component — it excludes whole outliers.
+
+### Static texture workflow
+
+**Bake To Static Texture** saves the current capture as a real `UTexture2D` via
+`RenderTargetCreateStaticTexture2DEditorOnly`, assigns it to `StaticMapTexture`, and
+switches this instance to Static Texture mode. Path defaults to `/Game/Minimap/Generated`
+and the name to `T_Minimap_<LevelName>`, so two levels cannot overwrite each other.
+
+Plugin-shipped textures load with
+`UMinimapFunctionLibrary::LoadPluginTexture("Textures/T_MyMap")`, resolving against the
+`/Minimap/` mount point.
+
+## 10. Test coverage
 
 `Private/Tests/MinimapProjectionTests.cpp`, all under the `Minimap.` prefix:
 

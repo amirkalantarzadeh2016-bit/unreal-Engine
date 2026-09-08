@@ -212,9 +212,11 @@ void UMinimapWidgetBase::HandleViewUpdated(UMinimapViewComponent* View, const TA
 		UpdateMaterialParameters(*View);
 	}
 
-	if (bDriveNorthIndicator && IsValid(North_Container))
+	// The cardinal indicators are driven from NativeTick using the SMOOTHED angle, so the
+	// old snap-on-update path here would fight the interpolation. Kept only as the
+	// non-smoothed fallback.
+	if (bDriveNorthIndicator && !View->bSmoothCompass && IsValid(North_Container))
 	{
-		// Counter-rotate so the compass keeps pointing at world north as the map turns.
 		const float CompassAngle = View->GetCompassAngle();
 		if (!bCompassInitialized || !FMath::IsNearlyEqual(CachedCompassAngle, CompassAngle, 0.01f))
 		{
@@ -614,4 +616,103 @@ bool UMinimapWidgetBase::UpdateCompositedBackground(UMinimapViewComponent* View)
 	UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(World, Context);
 
 	return true;
+}
+
+
+// ---------------------------------------------------------------------------
+// Cardinal indicators and zoom passthroughs
+// ---------------------------------------------------------------------------
+
+void UMinimapWidgetBase::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	// Deliberately the ONLY per-frame work in this widget. The smoothing has to run at
+	// frame rate or the "floating" motion looks stepped at the subsystem's 30 Hz update.
+	// It is a handful of float operations plus a render transform per indicator.
+	UpdateCardinalIndicators();
+}
+
+float UMinimapWidgetBase::GetSmoothedCompassAngle() const
+{
+	const UMinimapViewComponent* View = BoundView.Get();
+	return View ? View->GetSmoothedCompassAngle() : 0.0f;
+}
+
+void UMinimapWidgetBase::ApplyCardinalTransform(UWidget* Indicator, int32 CardinalIndex)
+{
+	if (!IsValid(Indicator))
+	{
+		return;
+	}
+
+	const UMinimapViewComponent* View = BoundView.Get();
+	if (!View)
+	{
+		return;
+	}
+
+	if (bOrbitCardinalIndicators)
+	{
+		// Ride around the ring. The slot's alignment should be (0.5, 0.5) so the offset
+		// positions the icon's centre.
+		if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(Indicator->Slot))
+		{
+			CanvasSlot->SetPosition(View->GetCardinalRingOffset(CardinalIndex, CardinalRingRadius));
+		}
+
+		// A letter should stay readable while it orbits; an arrow should point outward.
+		Indicator->SetRenderTransformAngle(
+			bKeepCardinalIconsUpright ? 0.0f : View->GetCardinalScreenAngle(CardinalIndex));
+	}
+	else
+	{
+		// Compass-ring behaviour: spin in place with the map. This is what the existing
+		// North_Container already did, now driven by the smoothed angle.
+		Indicator->SetRenderTransformAngle(View->GetCardinalScreenAngle(CardinalIndex));
+	}
+}
+
+void UMinimapWidgetBase::UpdateCardinalIndicators()
+{
+	if (!BoundView.IsValid())
+	{
+		return;
+	}
+
+	// Index order matches GetCardinalScreenAngle: 0 = N, 1 = E, 2 = S, 3 = W.
+	ApplyCardinalTransform(North_Container, 0);
+	ApplyCardinalTransform(East_Container,  1);
+	ApplyCardinalTransform(South_Container, 2);
+	ApplyCardinalTransform(West_Container,  3);
+}
+
+void UMinimapWidgetBase::ZoomIn()
+{
+	if (UMinimapViewComponent* View = BoundView.Get())
+	{
+		View->ZoomIn();
+	}
+}
+
+void UMinimapWidgetBase::ZoomOut()
+{
+	if (UMinimapViewComponent* View = BoundView.Get())
+	{
+		View->ZoomOut();
+	}
+}
+
+void UMinimapWidgetBase::SetZoomAlpha(float Alpha)
+{
+	if (UMinimapViewComponent* View = BoundView.Get())
+	{
+		View->SetZoomAlpha(Alpha);
+	}
+}
+
+float UMinimapWidgetBase::GetZoomAlpha() const
+{
+	const UMinimapViewComponent* View = BoundView.Get();
+	return View ? View->GetZoomAlpha() : 0.0f;
 }
