@@ -1,5 +1,13 @@
 # Minimap Plugin (UE 5.8)
 
+> **📖 Full documentation: [`Documentation/`](Documentation/README.md)**
+> — [Setup](Documentation/01-Setup.md) · [Usage](Documentation/02-Usage.md) ·
+> [Configuration](Documentation/03-Configuration.md) ·
+> [Blueprint Reference](Documentation/04-BlueprintReference.md) ·
+> [Troubleshooting](Documentation/05-Troubleshooting.md)
+>
+> This file is the technical/architectural overview. Start with the Documentation folder.
+
 A modular, calibrated world-to-map projection and marker system. Replaces the per-Tick
 `WBP_Minimap` graph with a subsystem-driven architecture, while keeping the existing
 `WBP_Minimap` and `M_Minimap` assets working unchanged.
