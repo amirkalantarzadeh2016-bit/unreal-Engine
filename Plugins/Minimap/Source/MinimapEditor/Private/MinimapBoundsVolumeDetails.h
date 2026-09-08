@@ -41,7 +41,7 @@ private:
 	AMinimapBoundsVolume* GetVolume() const { return CustomizedVolume.Get(); }
 
 	/** Single definition of a plugin action button, so every one looks identical. */
-	static SHorizontalBox::FSlot::FSlotArguments MakeActionSlot(
+	static TSharedRef<SWidget> MakeActionButton(
 		const FText& Label, const FText& Tooltip, FOnClicked OnClicked);
 
 	/** Labelled divider that groups the action bars into sections. */

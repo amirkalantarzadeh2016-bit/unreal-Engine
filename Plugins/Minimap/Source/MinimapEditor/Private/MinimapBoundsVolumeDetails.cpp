@@ -20,6 +20,9 @@
 
 #define LOCTEXT_NAMESPACE "MinimapBoundsVolumeDetails"
 
+/** Shared padding so every plugin action button sits on the same rhythm. */
+static const FMargin ActionButtonPadding(0.0f, 3.0f, 6.0f, 3.0f);
+
 TSharedRef<IDetailCustomization> FMinimapBoundsVolumeDetails::MakeInstance()
 {
 	return MakeShared<FMinimapBoundsVolumeDetails>();
@@ -171,20 +174,26 @@ void FMinimapBoundsVolumeDetails::CustomizeDetails(IDetailLayoutBuilder& DetailB
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
-		+ MakeActionSlot(
-			LOCTEXT("CaptureNow", "Capture / Refresh"),
-			LOCTEXT("CaptureNowTip",
-				"Render the scene capture and update the preview below.\n\n"
-				"Works in the editor without entering PIE, and does NOT change Background Source "
-				"or overwrite the configured static texture."),
-			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnCaptureClicked))
-		+ MakeActionSlot(
-			LOCTEXT("SaveStatic", "Bake To Static Texture"),
-			LOCTEXT("SaveStaticTip",
-				"Save the current capture as a real UTexture2D asset and switch this volume to "
-				"Static Texture mode.\n\n"
-				"Trades runtime capture cost for a baked image. Capture at least once first."),
-			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnBakeStaticClicked))
+		+ SHorizontalBox::Slot().AutoWidth().Padding(ActionButtonPadding)
+		[
+			MakeActionButton(
+				LOCTEXT("CaptureNow", "Capture / Refresh"),
+				LOCTEXT("CaptureNowTip",
+					"Render the scene capture and update the preview below.\n\n"
+					"Works in the editor without entering PIE, and does NOT change Background Source "
+					"or overwrite the configured static texture."),
+				FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnCaptureClicked))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(ActionButtonPadding)
+		[
+			MakeActionButton(
+				LOCTEXT("SaveStatic", "Bake To Static Texture"),
+				LOCTEXT("SaveStaticTip",
+					"Save the current capture as a real UTexture2D asset and switch this volume to "
+					"Static Texture mode.\n\n"
+					"Trades runtime capture cost for a baked image. Capture at least once first."),
+				FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnBakeStaticClicked))
+		]
 	];
 
 	AddSectionHeading(Category, LOCTEXT("GroupBounds", "Bounds"));
@@ -193,20 +202,26 @@ void FMinimapBoundsVolumeDetails::CustomizeDetails(IDetailLayoutBuilder& DetailB
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
-		+ MakeActionSlot(
-			LOCTEXT("FitGeometry", "Fit To Geometry"),
-			LOCTEXT("FitGeometryTip",
-				"Fit the bounds tightly to the actual architectural meshes.\n\n"
-				"Weights each mesh component by volume and trims outliers, so empty space and "
-				"stray distant objects no longer inflate the map.\n\n"
-				"CHANGES YOUR CALIBRATION - markers and image both move."),
-			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnFitGeometryClicked))
-		+ MakeActionSlot(
-			LOCTEXT("FitActors", "Fit To All Actors"),
-			LOCTEXT("FitActorsTip",
-				"The original, looser fit: unions every eligible actor's bounds.\n\n"
-				"CHANGES YOUR CALIBRATION - markers and image both move."),
-			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnFitActorsClicked))
+		+ SHorizontalBox::Slot().AutoWidth().Padding(ActionButtonPadding)
+		[
+			MakeActionButton(
+				LOCTEXT("FitGeometry", "Fit To Geometry"),
+				LOCTEXT("FitGeometryTip",
+					"Fit the bounds tightly to the actual architectural meshes.\n\n"
+					"Weights each mesh component by volume and trims outliers, so empty space and "
+					"stray distant objects no longer inflate the map.\n\n"
+					"CHANGES YOUR CALIBRATION - markers and image both move."),
+				FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnFitGeometryClicked))
+		]
+		+ SHorizontalBox::Slot().AutoWidth().Padding(ActionButtonPadding)
+		[
+			MakeActionButton(
+				LOCTEXT("FitActors", "Fit To All Actors"),
+				LOCTEXT("FitActorsTip",
+					"The original, looser fit: unions every eligible actor's bounds.\n\n"
+					"CHANGES YOUR CALIBRATION - markers and image both move."),
+				FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnFitActorsClicked))
+		]
 	];
 
 	AddSectionHeading(Category, LOCTEXT("GroupDiagnostics", "Diagnostics"));
@@ -215,13 +230,16 @@ void FMinimapBoundsVolumeDetails::CustomizeDetails(IDetailLayoutBuilder& DetailB
 	.WholeRowContent()
 	[
 		SNew(SHorizontalBox)
-		+ MakeActionSlot(
-			LOCTEXT("ValidateNow", "Validate Setup"),
-			LOCTEXT("ValidateNowTip",
-				"Check the whole setup and write a staged pipeline report to LogMinimap, "
-				"including a read-back verdict on whether the render target actually contains "
-				"an image."),
-			FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnValidateClicked))
+		+ SHorizontalBox::Slot().AutoWidth().Padding(ActionButtonPadding)
+		[
+			MakeActionButton(
+				LOCTEXT("ValidateNow", "Validate Setup"),
+				LOCTEXT("ValidateNowTip",
+					"Check the whole setup and write a staged pipeline report to LogMinimap, "
+					"including a read-back verdict on whether the render target actually contains "
+					"an image."),
+				FOnClicked::CreateSP(this, &FMinimapBoundsVolumeDetails::OnValidateClicked))
+		]
 	];
 
 	// --- Static preview ----------------------------------------------------
@@ -296,22 +314,19 @@ FReply FMinimapBoundsVolumeDetails::OnCaptureClicked()
 	return FReply::Handled();
 }
 
-SHorizontalBox::FSlot::FSlotArguments FMinimapBoundsVolumeDetails::MakeActionSlot(
+TSharedRef<SWidget> FMinimapBoundsVolumeDetails::MakeActionButton(
 	const FText& Label, const FText& Tooltip, FOnClicked OnClicked)
 {
-	// Single definition of what a plugin button looks like, so every action in the panel
-	// is identical in size, padding and behaviour.
-	return MoveTemp(*SHorizontalBox::Slot()
-		.AutoWidth()
-		.Padding(0.0f, 3.0f, 6.0f, 3.0f)
-		[
-			SNew(SButton)
-			.Text(Label)
-			.ToolTipText(Tooltip)
-			.HAlign(HAlign_Center)
-			.ContentPadding(FMargin(10.0f, 4.0f))
-			.OnClicked(OnClicked)
-		]);
+	// Single definition of what a plugin button LOOKS like, so every action in the panel is
+	// identical in size, padding and behaviour. The caller supplies the slot, because
+	// returning FSlotArguments from a function depends on which operator+ overloads the
+	// engine version provides.
+	return SNew(SButton)
+		.Text(Label)
+		.ToolTipText(Tooltip)
+		.HAlign(HAlign_Center)
+		.ContentPadding(FMargin(10.0f, 4.0f))
+		.OnClicked(OnClicked);
 }
 
 void FMinimapBoundsVolumeDetails::AddSectionHeading(IDetailCategoryBuilder& Category, const FText& Heading)
