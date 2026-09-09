@@ -455,7 +455,9 @@ FBox UArchOpeningComponent::GetLeafLocalBounds() const
 
 void UArchOpeningComponent::RebuildLeafBoundsCache()
 {
-	FBox Bounds(ForceInit);
+	// Not named "Bounds": that would shadow USceneComponent::Bounds, which the engine's build
+	// settings treat as an error rather than a warning.
+	FBox LeafBounds(ForceInit);
 	bool bAny = false;
 
 	for (const FArchOpeningPartRef& Part : LeafParts)
@@ -473,11 +475,11 @@ void UArchOpeningComponent::RebuildLeafBoundsCache()
 
 		// CalcBounds with the rest transform yields the part's bounds directly in calibration space.
 		const FBoxSphereBounds PartBounds = Primitive->CalcBounds(Part.RestRelative);
-		Bounds += PartBounds.GetBox();
+		LeafBounds += PartBounds.GetBox();
 		bAny = true;
 	}
 
-	CachedLeafLocalBounds = Bounds;
+	CachedLeafLocalBounds = LeafBounds;
 	bLeafBoundsCached = bAny;
 }
 

@@ -460,7 +460,9 @@ bool UArchOpeningComponent::QueryObstruction(float TestOpenness, AActor*& OutObs
 
 	if (::IsValid(ProximityVolume))
 	{
-		Params.AddIgnoredComponent(ProximityVolume);
+		// .Get() is required: a TObjectPtr converts equally well to both AddIgnoredComponent
+		// overloads (raw pointer and TWeakObjectPtr), so the call is ambiguous without it.
+		Params.AddIgnoredComponent(ProximityVolume.Get());
 	}
 
 	for (int32 SliceIndex = 0; SliceIndex < SliceCount; ++SliceIndex)

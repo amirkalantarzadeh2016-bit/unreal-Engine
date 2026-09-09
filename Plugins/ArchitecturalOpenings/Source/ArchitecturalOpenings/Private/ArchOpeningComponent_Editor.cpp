@@ -282,7 +282,9 @@ void UArchOpeningComponent::SnapHandlePivotToGroupBounds(int32 GroupIndex)
 
 	FArchOpeningHandleGroup& Group = HandleGroups[GroupIndex];
 
-	FBox Bounds(ForceInit);
+	// Not named "Bounds": that would shadow USceneComponent::Bounds, which the engine's build
+	// settings treat as an error rather than a warning.
+	FBox GroupBounds(ForceInit);
 	bool bAny = false;
 
 	for (const FArchOpeningPartRef& Part : Group.Parts)
@@ -293,7 +295,7 @@ void UArchOpeningComponent::SnapHandlePivotToGroupBounds(int32 GroupIndex)
 			continue;
 		}
 
-		Bounds += Primitive->CalcBounds(Part.RestRelative).GetBox();
+		GroupBounds += Primitive->CalcBounds(Part.RestRelative).GetBox();
 		bAny = true;
 	}
 
@@ -306,7 +308,7 @@ void UArchOpeningComponent::SnapHandlePivotToGroupBounds(int32 GroupIndex)
 	}
 
 	Modify();
-	Group.PivotLocation = Bounds.GetCenter();
+	Group.PivotLocation = GroupBounds.GetCenter();
 
 	// A lever rotates about the axis normal to the door face, which is the outside direction.
 	const FVector Outside = Calibration.OutsideDirection.GetSafeNormal();

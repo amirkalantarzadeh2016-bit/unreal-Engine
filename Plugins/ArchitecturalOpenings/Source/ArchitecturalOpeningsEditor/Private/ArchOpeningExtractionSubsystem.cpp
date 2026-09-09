@@ -220,7 +220,7 @@ bool UArchOpeningExtractionSubsystem::AnalyzeMesh(UStaticMesh* SourceMesh, float
 		++Piece.TriangleCount;
 
 		const FPolygonGroupID GroupID = SourceDescription->GetTrianglePolygonGroup(TriangleID);
-		if (GroupID != FPolygonGroupID::Invalid)
+		if (GroupID != INDEX_NONE)
 		{
 			Piece.MaterialSlots.AddUnique(SlotNames[GroupID]);
 		}
@@ -483,7 +483,7 @@ namespace ArchOpeningExtraction
 
 		NewMesh->SetLightMapCoordinateIndex(SourceMesh->GetLightMapCoordinateIndex());
 		NewMesh->SetLightMapResolution(SourceMesh->GetLightMapResolution());
-		NewMesh->NaniteSettings = SourceMesh->NaniteSettings;
+		NewMesh->SetNaniteSettings(SourceMesh->GetNaniteSettings());
 
 		// Collision. Simple collision primitives are deliberately NOT copied: a convex hull or box
 		// authored for the whole source shape would be wrong for a subset of it.
