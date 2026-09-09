@@ -48,11 +48,26 @@ public:
 	}
 
 private:
-	UFUNCTION() void HandleOpeningStarted(UArchOpeningComponent*) { ++OpeningStarted; }
-	UFUNCTION() void HandleFullyOpened(UArchOpeningComponent*) { ++FullyOpened; }
-	UFUNCTION() void HandleClosingStarted(UArchOpeningComponent*) { ++ClosingStarted; }
-	UFUNCTION() void HandleFullyClosed(UArchOpeningComponent*) { ++FullyClosed; }
-	UFUNCTION() void HandleMotionStopped(UArchOpeningComponent*) { ++MotionStopped; }
-	UFUNCTION() void HandleInteractionAccepted(UArchOpeningComponent*, AActor*) { ++InteractionAccepted; }
-	UFUNCTION() void HandleObstructionDetected(UArchOpeningComponent*, AActor*) { ++ObstructionDetected; }
+	// Every parameter has to be named: UnrealHeaderTool parses these signatures and rejects an
+	// unnamed parameter on a UFUNCTION, even one the body never reads.
+	UFUNCTION()
+	void HandleOpeningStarted(UArchOpeningComponent* Opening) { ++OpeningStarted; }
+
+	UFUNCTION()
+	void HandleFullyOpened(UArchOpeningComponent* Opening) { ++FullyOpened; }
+
+	UFUNCTION()
+	void HandleClosingStarted(UArchOpeningComponent* Opening) { ++ClosingStarted; }
+
+	UFUNCTION()
+	void HandleFullyClosed(UArchOpeningComponent* Opening) { ++FullyClosed; }
+
+	UFUNCTION()
+	void HandleMotionStopped(UArchOpeningComponent* Opening) { ++MotionStopped; }
+
+	UFUNCTION()
+	void HandleInteractionAccepted(UArchOpeningComponent* Opening, AActor* Interactor) { ++InteractionAccepted; }
+
+	UFUNCTION()
+	void HandleObstructionDetected(UArchOpeningComponent* Opening, AActor* Obstructor) { ++ObstructionDetected; }
 };
