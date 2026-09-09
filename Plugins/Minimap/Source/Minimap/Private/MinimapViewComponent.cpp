@@ -151,7 +151,24 @@ float UMinimapViewComponent::GetMapRotationTurns() const
 
 float UMinimapViewComponent::GetCompassAngle() const
 {
-	return UMinimapFunctionLibrary::GetCompassAngle(ViewYaw);
+	// The map image's own yaw shifts where north appears on screen, so a rotated plan needs
+	// it folded in or the indicator is wrong by exactly that angle.
+	const float EffectiveMapYaw = bCompassFollowsMapYaw ? CachedMapYaw : 0.0f;
+	return UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, EffectiveMapYaw, CompassYawOffset);
+}
+
+void UMinimapViewComponent::SetCompassYawOffset(float NewOffsetDegrees)
+{
+	const float Normalized = FRotator::NormalizeAxis(NewOffsetDegrees);
+	if (FMath::IsNearlyEqual(CompassYawOffset, Normalized, 0.001f))
+	{
+		return;
+	}
+
+	CompassYawOffset = Normalized;
+
+	// The target moved, so let the smoothing chase it rather than snapping.
+	UpdateSmoothingTickState();
 }
 
 FVector2D UMinimapViewComponent::GetMaterialPlayerParams() const
@@ -316,6 +333,9 @@ bool UMinimapViewComponent::RefreshViewState(const FMinimapCalibration& Calibrat
 	Anchor  = NewAnchor;
 	AnchorZ = NewAnchorZ;
 	ViewYaw = NewViewYaw;
+
+	// Cached so GetCompassAngle can honour a rotated map without reaching for the subsystem.
+	CachedMapYaw = Calibration.MapYaw;
 
 	// Fold the per-view zoom into a local copy so the shared calibration is never mutated
 	// by one view - that would corrupt every other view sharing the registry.

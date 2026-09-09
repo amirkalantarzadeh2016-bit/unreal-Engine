@@ -171,9 +171,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Minimap|Rotation")
 	static float GetMapRotationTurns(float ViewYaw, float MapYawOffset = 0.0f, bool bNegate = false);
 
-	/** Compass / north-indicator angle in degrees, normalized to [-180, 180). = -ViewYaw. */
+	/** Compass angle ignoring map yaw. Kept for compatibility; prefer GetCompassAngleEx. */
 	UFUNCTION(BlueprintPure, Category = "Minimap|Rotation")
 	static float GetCompassAngle(float ViewYaw);
+
+	/**
+	 * Screen angle at which world NORTH appears, in degrees clockwise from up - ready for
+	 * UWidget::SetRenderTransformAngle.
+	 *
+	 * Derivation: in the projection, screen-up corresponds to the world bearing
+	 * (MapYaw + ViewYaw). World north is bearing 0, so it appears at -(MapYaw + ViewYaw).
+	 *
+	 * MapYaw matters whenever the map image is not aligned to world north - a rotated
+	 * bounds volume, or a non-zero AdditionalMapYaw. Ignoring it leaves the compass wrong
+	 * by exactly that angle.
+	 *
+	 * CompassYawOffset is a further constant, for a ring texture whose "N" is not drawn at
+	 * the top of the image. Positive values rotate the indicator CLOCKWISE on screen.
+	 */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Rotation")
+	static float GetCompassAngleEx(float ViewYaw, float MapYaw, float CompassYawOffset);
 
 	/** Normalize any angle to [-180, 180). Safe against NaN and huge magnitudes. */
 	UFUNCTION(BlueprintPure, Category = "Minimap|Rotation")

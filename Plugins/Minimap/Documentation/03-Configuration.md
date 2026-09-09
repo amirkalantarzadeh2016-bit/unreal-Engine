@@ -121,6 +121,13 @@ Lives on the preset, or on `CaptureSettingsOverride` per instance.
 | `ViewAngleTolerance` | **0.25°** | Below this the view is not considered turned. |
 | `MaxMarkersPerView` | **0** | 0 = unlimited. Highest priority survives. |
 
+### Compass calibration
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `CompassYawOffset` | **0°** | Constant rotation of every compass indicator, **clockwise-positive**. The dial for a ring texture whose "N" is not at the top, or for aligning to a plan drawn at an angle. Purely visual — markers, map, zoom and projection are untouched. |
+| `bCompassFollowsMapYaw` | **true** | Fold the calibration's `MapYaw` in, so the indicator points at true world north even when the map image is not north-aligned. No-op when `MapYaw` is 0 (which both Fit buttons produce, since they reset the volume's rotation). |
+
 ### Compass float
 
 | Setting | Default | Meaning |

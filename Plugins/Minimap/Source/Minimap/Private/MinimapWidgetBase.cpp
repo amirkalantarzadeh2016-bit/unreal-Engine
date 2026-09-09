@@ -675,9 +675,17 @@ void UMinimapWidgetBase::ApplyCardinalTransform(UWidget* Indicator, int32 Cardin
 
 void UMinimapWidgetBase::UpdateCardinalIndicators()
 {
-	if (!BoundView.IsValid())
+	const UMinimapViewComponent* View = BoundView.Get();
+	if (!View)
 	{
 		return;
+	}
+
+	// A single ring carries all four letters in its texture, so it only ever spins in
+	// place - orbiting it would swing the whole ring around the map.
+	if (IsValid(CompassRing))
+	{
+		CompassRing->SetRenderTransformAngle(View->GetSmoothedCompassAngle());
 	}
 
 	// Index order matches GetCardinalScreenAngle: 0 = N, 1 = E, 2 = S, 3 = W.
@@ -685,6 +693,20 @@ void UMinimapWidgetBase::UpdateCardinalIndicators()
 	ApplyCardinalTransform(East_Container,  1);
 	ApplyCardinalTransform(South_Container, 2);
 	ApplyCardinalTransform(West_Container,  3);
+}
+
+void UMinimapWidgetBase::SetCompassYawOffset(float NewOffsetDegrees)
+{
+	if (UMinimapViewComponent* View = BoundView.Get())
+	{
+		View->SetCompassYawOffset(NewOffsetDegrees);
+	}
+}
+
+float UMinimapWidgetBase::GetCompassYawOffset() const
+{
+	const UMinimapViewComponent* View = BoundView.Get();
+	return View ? View->CompassYawOffset : 0.0f;
 }
 
 void UMinimapWidgetBase::ZoomIn()

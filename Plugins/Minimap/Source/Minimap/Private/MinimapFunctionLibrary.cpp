@@ -266,7 +266,15 @@ float UMinimapFunctionLibrary::GetMapRotationTurns(float ViewYaw, float MapYawOf
 
 float UMinimapFunctionLibrary::GetCompassAngle(float ViewYaw)
 {
+	// Equivalent to GetCompassAngleEx with no map yaw and no offset.
 	return NormalizeAngleDegrees(-ViewYaw);
+}
+
+float UMinimapFunctionLibrary::GetCompassAngleEx(float ViewYaw, float MapYaw, float CompassYawOffset)
+{
+	// Screen-up is world bearing (MapYaw + ViewYaw); north is bearing 0, so north sits at
+	// the negation of that. The offset is then applied in screen space, clockwise-positive.
+	return NormalizeAngleDegrees(-(ViewYaw + MapYaw) + CompassYawOffset);
 }
 
 float UMinimapFunctionLibrary::NormalizeAngleDegrees(float AngleDegrees)

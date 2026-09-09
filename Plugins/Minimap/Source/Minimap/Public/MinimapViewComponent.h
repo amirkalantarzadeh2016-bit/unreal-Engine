@@ -147,6 +147,39 @@ public:
 	// the system keeps its "no per-frame work" property.
 	// ---------------------------------------------------------------------
 
+	/**
+	 * Constant rotation applied to every compass indicator, in degrees, clockwise-positive.
+	 *
+	 * This is the calibration dial for a compass RING whose "N" is not drawn at the top of
+	 * its texture, or for aligning the ring to a floor plan drawn at an angle. Set 40 and
+	 * the ring sits 40 degrees clockwise of where it otherwise would.
+	 *
+	 * It is purely visual: markers, the map image, zoom and the projection are untouched.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass",
+		meta = (Units = "deg", UIMin = "-180.0", UIMax = "180.0"))
+	float CompassYawOffset = 0.0f;
+
+	/**
+	 * Account for the calibration's MapYaw, so the indicator points at true world north
+	 * even when the map image is not aligned to north (a rotated bounds volume, or a
+	 * non-zero AdditionalMapYaw).
+	 *
+	 * Leave this on. It is a no-op when MapYaw is 0, which is the case after either Fit
+	 * button, since both reset the volume's rotation. Turn it off only if you are
+	 * deliberately compensating for map yaw somewhere else and would otherwise double it.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass")
+	bool bCompassFollowsMapYaw = true;
+
+	/** Set the compass offset at runtime. Eases into place when smoothing is on. */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Compass")
+	void SetCompassYawOffset(float NewOffsetDegrees);
+
+	/** MapYaw from the last applied calibration, in degrees. */
+	UFUNCTION(BlueprintPure, Category = "Minimap|Compass")
+	float GetCalibrationMapYaw() const { return CachedMapYaw; }
+
 	/** Let the compass lag behind the view, giving the indicators a floating feel. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Compass")
 	bool bSmoothCompass = true;
@@ -361,6 +394,9 @@ private:
 
 	/** Compass angle currently displayed; chases GetCompassAngle(). */
 	float SmoothedCompassAngle = 0.0f;
+
+	/** MapYaw copied from the calibration each refresh, so the compass can honour it. */
+	float CachedMapYaw = 0.0f;
 	bool bCompassInitialized = false;
 
 	/** Zoom currently displayed; chases TargetZoomMultiplier. */

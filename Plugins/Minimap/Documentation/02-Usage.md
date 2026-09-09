@@ -53,6 +53,7 @@ destroyed pawn is skipped rather than followed.
 |---|---|---|
 | `Background` | Image | The map image |
 | `MarkerCanvas` | Canvas Panel | Parent for pooled marker widgets |
+| `CompassRing` | any Widget | **Single ring** with N/S/E/W in one texture — use *instead of* the four below |
 | `North_Container` | any Widget | North indicator |
 | `South_Container` | any Widget | South indicator |
 | `East_Container` | any Widget | East indicator |
@@ -128,6 +129,28 @@ into. The per-level default name means two levels cannot silently overwrite each
 
 **Compass indicators** are driven automatically once bound (Step 3). They lag behind the
 view for a floating feel — see [03 — Configuration](03-Configuration.md).
+
+### One ring vs. four icons
+
+Bind **either** `CompassRing` (a single texture with N/S/E/W drawn on it) **or** the four
+`*_Container` widgets. They are alternatives. A ring always spins in place; orbiting is
+only meaningful for separate icons.
+
+### Calibrating the ring to your plan
+
+If the ring's "N" is not at the top of its texture, or your floor plan is drawn at an angle
+to world north, set **`CompassYawOffset`** on the Minimap View component. Degrees,
+**clockwise-positive** — enter `40` and the ring sits 40° clockwise of where it otherwise
+would, at every heading.
+
+It is purely visual: markers, the map image, zoom and the projection are unaffected.
+
+At runtime: `Set Compass Yaw Offset` on the widget or the view component.
+
+> **A rotated bounds volume is handled separately.** If the *map itself* is not north
+> aligned (a rotated volume, or a non-zero `AdditionalMapYaw`), `bCompassFollowsMapYaw`
+> (on by default) already accounts for it. Use `CompassYawOffset` only for the artwork,
+> or you will be compensating twice.
 
 **Zoom** — bind buttons or a slider to these on the widget:
 

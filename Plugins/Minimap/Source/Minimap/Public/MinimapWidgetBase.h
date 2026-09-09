@@ -56,6 +56,19 @@ public:
 	TObjectPtr<UWidget> North_Container;
 
 	/**
+	 * A SINGLE compass ring texture with N/S/E/W already drawn on it.
+	 *
+	 * Bind this instead of the four separate containers below - they are alternatives, not
+	 * companions. The ring always spins in place (orbiting a ring makes no sense), and it
+	 * is driven by the same smoothed angle, so it floats identically.
+	 *
+	 * If the ring's "N" is not at the top of its texture, or your plan is drawn at an angle,
+	 * dial it in with the view component's CompassYawOffset rather than editing the art.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "Minimap|Compass", meta = (BindWidgetOptional))
+	TObjectPtr<UWidget> CompassRing;
+
+	/**
 	 * Cardinal indicators. All optional - bind whichever you add.
 	 *
 	 * "North_Container" is the existing binding and keeps working unchanged. Add
@@ -251,6 +264,16 @@ public:
 	float GetSmoothedCompassAngle() const;
 
 	// --- Zoom passthroughs, so Blueprint can bind buttons without reaching for the view --
+
+	/**
+	 * Rotate every compass indicator by a constant, in degrees, clockwise-positive.
+	 * The calibration dial for a ring whose "N" is not drawn at the top.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Compass")
+	void SetCompassYawOffset(float NewOffsetDegrees);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Compass")
+	float GetCompassYawOffset() const;
 
 	UFUNCTION(BlueprintCallable, Category = "Minimap|Zoom")
 	void ZoomIn();
