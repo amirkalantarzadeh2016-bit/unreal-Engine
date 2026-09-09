@@ -8,10 +8,10 @@ An artist selects meshes that already exist in the level, says which ones are th
 which are the handles, places a hinge or a slide path, sets timing and sound, and the opening
 responds to clicks or to a player walking up to it. No per-door C++ and no per-door Blueprint.
 
-> **Build status: compilation is unverified.** No Unreal Engine 5.8 installation was available in
-> the environment this was written in, so nothing here has been compiled, run or tested in an
-> editor. Every claim about behaviour describes what the code is written to do. See
-> `Docs/Limitations.md` for the full, honest status table.
+> **Build status: compiles and loads against UE 5.8.** The extraction tool has been used on real
+> architectural meshes. The automated tests have not been run and no runtime motion, interaction or
+> audio behaviour has been exercised in Play In Editor. See `Docs/Limitations.md` for the full,
+> honest status table.
 
 ---
 
@@ -98,6 +98,8 @@ Plugins/ArchitecturalOpenings/
     │   │   ├── ArchOpeningComponent.h            the controller
     │   │   ├── ArchOpeningActor.h                convenience actor
     │   │   ├── ArchOpeningPreset.h               reusable behaviour data asset
+    │   │   ├── ArchOpeningPieceSetComponent.h    live extraction session state (editor-only)
+    │   │   ├── ArchOpeningExtractionProfile.h    persisted piece -> group classification
     │   │   ├── ArchOpeningSubsystem.h            click -> opening registry
     │   │   ├── ArchOpeningInteractorComponent.h  optional player helper
     │   │   └── ArchOpeningFunctionLibrary.h      Blueprint helpers
@@ -111,6 +113,8 @@ Plugins/ArchitecturalOpenings/
     │       ├── ArchOpeningComponent_Editor.cpp     assignment, snapping, preview (WITH_EDITOR)
     │       ├── ArchOpeningComponent_Validation.cpp validation rules
     │       ├── ArchOpeningActor.cpp
+    │       ├── ArchOpeningPieceSetComponent.cpp
+    │       ├── ArchOpeningPreset.cpp
     │       ├── ArchOpeningSubsystem.cpp
     │       ├── ArchOpeningInteractorComponent.cpp
     │       ├── ArchOpeningFunctionLibrary.cpp
@@ -122,14 +126,15 @@ Plugins/ArchitecturalOpenings/
         ├── ArchitecturalOpeningsEditor.Build.cs
         ├── Public/
         │   ├── ArchitecturalOpeningsEditorModule.h
-        │   └── ArchOpeningExtractionSubsystem.h    disconnected-piece analysis + asset writing
+        │   └── ArchOpeningExtractionSubsystem.h    piece analysis, multi-group extraction, profiles
         └── Private/
             ├── ArchitecturalOpeningsEditorModule.cpp
             ├── ArchOpeningPreviewManager.h/.cpp     core-ticker preview, safety on PIE/save/close
             ├── ArchOpeningComponentVisualizer.h/.cpp hinge, axis, outside arrow, arc, slide, box
+            ├── ArchOpeningPieceSetVisualizer.h/.cpp   live piece boxes + click-to-assign hit proxies
             ├── ArchOpeningComponentDetails.h/.cpp    details-panel commands
             ├── SArchOpeningSetupPanel.h/.cpp         the 12-step setup panel
-            ├── SArchOpeningExtractionPanel.h/.cpp    leaf extraction UI
+            ├── SArchOpeningExtractionPanel.h/.cpp    multi-group leaf extraction UI
             └── ArchOpeningExtractionSubsystem.cpp
 ```
 
@@ -161,7 +166,10 @@ not staged.
 ## Where things live in the editor
 
 * **Window > Architectural Openings** - the setup panel.
-* **Window > Opening Leaf Extraction** - the one-mesh splitting tool.
+* **Window > Opening Leaf Extraction** - splits a one-mesh source into a stationary frame plus one
+  asset per movable leaf. Pieces are drawn live in the viewport, colour-coded by group, and clicking
+  one assigns it. Assignments persist in a profile asset, so extraction is re-editable rather than
+  one-way.
 * Select an opening actor and the **Details** panel gains an *Opening Commands* category with
   calibration, snapping, preview and a live validation summary.
 * The viewport draws the hinge, hinge axis, reference outside arrow, swing arc, slide path, leaf

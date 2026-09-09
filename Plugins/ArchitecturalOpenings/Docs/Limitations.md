@@ -2,24 +2,20 @@
 
 ## Verification status
 
-**Compilation is unverified.** No Unreal Engine 5.8 installation (or any UE installation) was
-available in the environment where this plugin was written. Nothing has been compiled, no editor has
-been opened, and no test has been run. Every statement about behaviour describes what the code is
-written to do, not an observed result.
+**The plugin compiles against Unreal Engine 5.8 and loads in the editor.** That is confirmed by it
+building and by the extraction tool being used on real assets. Three compile errors and one
+UnrealHeaderTool error found on the first real builds have been fixed.
 
-The engine APIs used were chosen to be long-stable UE5 surfaces. The most version-sensitive parts,
-in order of risk, are:
+What is confirmed and what is not:
 
-1. **Editor mesh-description APIs** used by extraction: `UStaticMesh::GetMeshDescription`,
-   `CreateMeshDescription`, `CommitMeshDescription`, `AddSourceModel`, `GetStaticMaterials`, and the
-   `FStaticMeshAttributes` / `FStaticMeshConstAttributes` accessors. These have moved and changed
-   signature across UE5 releases more than anything else here.
-2. **`FCollisionShape::MakeBox`** overload resolution (`FVector` vs `FVector3f`) after LWC.
-3. **`Engine/OverlapResult.h`** and `CollisionShape.h` include paths.
-4. **Slate declarative attribute/event overloads** in the two panels.
+* **Confirmed:** both modules compile and link; the editor module loads; the extraction tool runs
+  against real architectural meshes.
+* **Not confirmed:** the automated tests have not been run; no runtime motion, interaction,
+  proximity, obstruction or audio behaviour has been exercised in Play In Editor; nothing in the
+  manual checklist has been ticked off.
 
-If any of these fail to compile, the fix is local to the file involved; none of them affect the
-motion, state machine, interaction or audio design.
+Statements below about behaviour describe what the code is written to do, except where this
+document says a thing has actually been observed.
 
 ---
 
@@ -27,33 +23,40 @@ motion, state machine, interaction or audio design.
 
 | Feature | Implemented | Compiled | Tested | Limitations |
 |---|---|---|---|---|
-| Runtime data model, calibration frame, rest capture | Yes | No | Automated tests written, not run | Opening component scale is honoured only when uniform and positive; otherwise dropped to 1 with a warning |
-| Drift-free pose recomputation | Yes | No | Automated (`RotatedFrameAndDrift`), not run | — |
-| Hinged motion, handing and swing presets | Yes | No | Automated (`HingeHandingAndSwing`), not run | Single axis only; no tilt-and-turn dual mode |
-| Sliding motion | Yes | No | Automated (`SlidingTravel`), not run | Straight-line travel only; no curved or multi-segment tracks |
-| State machine, timing modes, delays, auto-close | Yes | No | Automated (`TimingModesAndDelays`), not run | Speed mode defines nominal full-travel time, not instantaneous velocity |
-| Mid-motion reversal | Yes | No | Automated (`MidMotionReversal`), not run | Position continuous; **velocity is not continuous** across a reversal by design |
-| Easing, curve validation and clamping | Yes | No | Automated (`ContractAndInversion`), not run | Custom curves must be non-decreasing with f(0)=0 and f(1)=1; failures fall back to Smooth Step |
-| Handle groups, actuation, both return behaviours | Yes | No | Partly automated; visual behaviour pending | Rotation only; no sliding or multi-stage hardware |
-| Blueprint commands and events | Yes | No | Event counts automated, not run | — |
-| Click interaction + world registry | Yes | No | Not tested | Requires a clickable mesh (or proxy) that blocks the trace channel |
-| Optional interactor component (centre screen / cursor) | Yes | No | Not tested | Does not create input mappings; you bind `Try Interact` yourself |
-| Proximity trigger, occupancy, close-on-exit | Yes | No | Not tested | Trigger is created at BeginPlay; it does not exist in the editor world (the viewport draws it instead) |
-| Combined-mode manual-close suppression | Yes | No | Not tested | Suppression is per occupancy cycle, cleared when the trigger empties |
-| Obstruction queries and policies | Yes | No | Not tested | Conservative discrete multi-box overlap, **not** continuous collision detection — see below |
-| Audio (all six slots, loop, fades, EndPlay cleanup) | Yes | No | Not tested | No audio assets ship with the plugin; every slot is optional |
-| Presets (Data Asset) | Yes | No | Not tested | Behaviour only; carries no level references, no hinge or slide placement |
-| Validation and diagnostics | Yes | No | Not tested | Runs on demand and at BeginPlay; log output is de-duplicated per issue key |
-| Editor setup panel (12-step workflow) | Yes | No | Not tested | Selection-driven; no drag-and-drop asset picking |
-| Details-panel commands | Yes | No | Not tested | — |
-| Viewport visualizer (hinge, axis, outside, arc, slide, bounds, trigger) | Yes | No | Not tested | Drawn for the selected opening; no interactive gizmo handles |
-| Editor preview + safety (PIE / save / map change / shutdown) | Yes | No | Not tested | Preview is transient and untransacted by design |
-| Undo/Redo on persistent setup operations | Yes | No | Not tested | Does not cover newly created **assets** from extraction |
-| Assisted leaf extraction (analysis + asset writing) | Yes | No | Not tested | LOD0 only; see the detailed list below |
-| Extraction preview in the viewport | Partial | No | Not tested | Draws per-piece bounding boxes in two colours, **not** per-triangle geometry |
-| Automated tests | Yes | No | Not run | Solver, easing and state machine only; nothing that needs a world |
+| Runtime data model, calibration frame, rest capture | Yes | Yes | Automated tests written, not run | Opening component scale is honoured only when uniform and positive; otherwise dropped to 1 with a warning |
+| Drift-free pose recomputation | Yes | Yes | Automated (`RotatedFrameAndDrift`), not run | — |
+| Hinged motion, handing and swing presets | Yes | Yes | Automated (`HingeHandingAndSwing`), not run | Single axis only; no tilt-and-turn dual mode |
+| Sliding motion | Yes | Yes | Automated (`SlidingTravel`), not run | Straight-line travel only; no curved or multi-segment tracks |
+| State machine, timing modes, delays, auto-close | Yes | Yes | Automated (`TimingModesAndDelays`), not run | Speed mode defines nominal full-travel time, not instantaneous velocity |
+| Mid-motion reversal | Yes | Yes | Automated (`MidMotionReversal`), not run | Position continuous; **velocity is not continuous** across a reversal by design |
+| Easing, curve validation and clamping | Yes | Yes | Automated (`ContractAndInversion`), not run | Custom curves must be non-decreasing with f(0)=0 and f(1)=1; failures fall back to Smooth Step |
+| Handle groups, actuation, both return behaviours | Yes | Yes | Partly automated; visual behaviour pending | Rotation only; no sliding or multi-stage hardware |
+| Blueprint commands and events | Yes | Yes | Event counts automated, not run | — |
+| Click interaction + world registry | Yes | Yes | Not tested | Requires a clickable mesh (or proxy) that blocks the trace channel |
+| Optional interactor component (centre screen / cursor) | Yes | Yes | Not tested | Does not create input mappings; you bind `Try Interact` yourself |
+| Proximity trigger, occupancy, close-on-exit | Yes | Yes | Not tested | Trigger is created at BeginPlay; it does not exist in the editor world (the viewport draws it instead) |
+| Combined-mode manual-close suppression | Yes | Yes | Not tested | Suppression is per occupancy cycle, cleared when the trigger empties |
+| Obstruction queries and policies | Yes | Yes | Not tested | Conservative discrete multi-box overlap, **not** continuous collision detection — see below |
+| Audio (all six slots, loop, fades, EndPlay cleanup) | Yes | Yes | Not tested | No audio assets ship with the plugin; every slot is optional |
+| Presets (Data Asset) | Yes | Yes | Not tested | Behaviour only; carries no level references, no hinge or slide placement |
+| Validation and diagnostics | Yes | Yes | Not tested | Runs on demand and at BeginPlay; log output is de-duplicated per issue key |
+| Editor setup panel (12-step workflow) | Yes | Yes | Not tested | Selection-driven; no drag-and-drop asset picking |
+| Details-panel commands | Yes | Yes | Not tested | — |
+| Viewport visualizer (hinge, axis, outside, arc, slide, bounds, trigger) | Yes | Yes | Not tested | Drawn for the selected opening; no interactive gizmo handles |
+| Editor preview + safety (PIE / save / map change / shutdown) | Yes | Yes | Not tested | Preview is transient and untransacted by design |
+| Undo/Redo on persistent setup operations | Yes | Yes | Not tested | Does not cover newly created **assets** from extraction |
+| Piece analysis (connected-component decomposition) | Yes | Yes | Used on real assets | LOD0 only; see the detailed list below |
+| Multi-group classification (N groups, not leaf/fixed) | Yes | Not yet | Not tested | Every populated group becomes one asset; at least two groups must be populated |
+| Live colour-coded viewport drawing | Yes | Not yet | Not tested | Only draws while the temporary session actor is selected |
+| Click-to-assign in the viewport (hit proxies) | Yes | Not yet | Not tested | Clicks land on a piece's bounding box, not its triangles - see below |
+| Viewport-to-list and list-to-viewport hover | Yes | Not yet | Not tested | Viewport hover polls the hit proxy under the cursor; can be switched off |
+| Batch selection (all / none / invert / similar) | Yes | Not yet | Not tested | "Similar" matches triangle count plus orientation-independent bounding size |
+| Re-editable state (extraction profile asset) | Yes | Not yet | Not tested | Keyed on triangle ids; a re-import of the source can invalidate them |
+| In-place asset update on re-extraction | Yes | Not yet | Not tested | Refused for multi-LOD targets, which fall back to a new asset |
+| Spawn split actors in the level | Yes | Not yet | Not tested | Hides rather than deletes the source actor |
+| Automated tests | Yes | Yes | **Not run** | Solver, easing and state machine only; nothing that needs a world |
 | Multiplayer replication | **Not implemented** | — | — | Out of scope for this version |
-| Double-leaf coordination, folding, roller shutters | **Not implemented** | — | — | Out of scope; the architecture leaves room for them (see below) |
+| Double-leaf *motion* coordination, folding, roller shutters | **Not implemented** | — | — | Extraction now classifies multiple leaves, but the runtime still drives one leaf per opening component; use one opening per leaf |
 | Lock-and-key system | **Not implemented** | — | — | Out of scope; `SetInteractionEnabled` is the hook |
 | Destructible openings, physics-driven simulation | **Not implemented** | — | — | Out of scope by design; motion is deterministic |
 | Automatic semantic recognition of imported door geometry | **Not implemented** | — | — | Deliberately not attempted |
@@ -111,7 +114,7 @@ Physics simulation is never enabled on animated meshes as a side effect. Poses a
 
 ---
 
-## Extraction: what it carries and what it does not
+## Extraction: workflow, and what it carries
 
 **Method.** Union-find over triangle adjacency: two triangles are in the same piece when they share
 a vertex. A mesh description already shares one vertex across the several vertex *instances* that a
@@ -125,43 +128,83 @@ reporting more pieces than expected.
 one glass or PVC material routinely spans both the fixed frame and the movable leaf, so material
 identity is never used to define a leaf.
 
-**Carried over:** vertex positions; per-instance normals, tangents, binormal signs and vertex
-colours; **every** UV channel; polygon-group material slot names and the matching material
-assignments; the source's build settings, lightmap UV index, lightmap resolution and Nanite
-settings. Normal and tangent recomputation is explicitly disabled on the new assets so the copied
-data is what ships.
+**Classification is into any number of groups.** A stationary bucket plus one movable group per leaf
+- two for a double door, one per panel for a folding door. Every group holding pieces becomes
+exactly one asset. Extraction is refused when fewer than two groups have pieces, because there would
+be nothing to separate.
+
+**A session never modifies the artist's actors.** It spawns one transient, editor-only holder actor
+carrying the piece set, and destroys it when the tool closes. Nothing about a session can be saved
+into a level.
+
+### Viewport interaction, and its limits
+
+* Pieces are drawn live, every frame, coloured by group. There is no snapshot to refresh and no
+  wait.
+* Clicking a piece assigns it to the active group. Ctrl-click ticks it without assigning;
+  Shift-click adds it to the ticked set and assigns the whole set.
+* **Clicks land on a piece's axis-aligned bounding box, not its triangles.** Where a small piece
+  sits inside a larger one's box, the two boxes overlap and the click resolves to whichever the
+  renderer put in front. Tick the row in the list instead when that happens.
+* **Drawing only happens while the temporary "Opening Piece Editing" actor is selected**, because
+  that is how component visualizers work. Clicking elsewhere in the level deselects it and the boxes
+  disappear; re-select it to carry on.
+* The optional per-triangle wireframe assigns each triangle to the **tightest bounding box that
+  contains its centroid**. That is an approximation and can mis-colour triangles where boxes
+  overlap. It is a visual aid; the actual split always uses the exact triangle sets from the
+  adjacency pass, never the boxes.
+* Viewport hover polls the hit proxy under the cursor a few times a second, and only when the cursor
+  has moved. It can force a hit-proxy render; switch it off in the panel if it costs too much on a
+  heavy scene.
+
+### Re-editability
+
+* Assignments persist in an **extraction profile** asset written next to the source mesh as
+  `<SourceMeshName>_OpeningProfile`. Re-opening the tool on that mesh restores them.
+* Assignments are matched by a **stable piece key** - the lowest triangle id in the piece - not by
+  list position, so a re-analysis that orders pieces differently still restores the right groups.
+  Pieces the profile has never seen stay stationary and are counted in the status line.
+* **Re-importing the source mesh can renumber its triangles**, which invalidates the keys. The tool
+  will then report most pieces as unmatched rather than silently mis-assigning them.
+* Extracting again **rewrites the assets each group produced last time**, so correcting one
+  misassigned piece does not create a second set of meshes and does not require re-pointing the
+  actors already placed in the level. In-place update is refused for a target with more than one
+  LOD (the tool only ever writes single-LOD assets, so such a target is not one of ours); that group
+  falls back to a new asset and says so.
+* **Group assignment changes are not on the undo stack.** The piece set lives on a transient actor,
+  so there is nothing for a transaction to restore. Re-assigning a piece is one click, and the
+  profile is what carries the work between sessions. Spawning split actors *is* transacted.
+
+**Carried over into the generated assets:** vertex positions; per-instance normals, tangents,
+binormal signs and vertex colours; **every** UV channel; polygon-group material slot names and the
+matching material assignments; the source's build settings, lightmap UV index, lightmap resolution
+and Nanite settings. Normal and tangent recomputation is explicitly disabled so the copied data is
+what ships.
 
 **Not carried over, and reported after every extraction:**
 
-* **LODs.** Only LOD0 is read and only one LOD is written. Any LODs on the source are gone. This is
-  stated in the tool before you extract and again in the result notes.
+* **LODs.** Only LOD0 is read and only one LOD is written. Any LODs on the source are gone.
 * **Simple collision primitives.** A convex hull or box authored for the whole source shape would be
-  wrong for a subset of it, so none are copied. The collision option controls what the new assets get
-  instead: complex-as-simple (the default, which makes them clickable), none, or the source's trace
-  flag with no primitives.
-* **Generated lightmap UVs** are rebuilt per new asset by the build and will not match the source's
+  wrong for a subset of it, so none are copied. The collision option controls what the new assets
+  get instead.
+* **Generated lightmap UVs** are rebuilt per asset by the build and will not match the source's
   packing.
 * **Sockets** and any custom asset metadata on the source.
 
 **Safety:**
 
-* The source asset is never modified. There is no in-place mode.
-* Outputs are created under the folder you specify with unique names (`<Source>_Leaf`,
-  `<Source>_Fixed`), and packages are only marked dirty — **nothing is saved to disk by the tool**.
-* Selecting every piece is refused (it would leave nothing behind as the fixed part).
+* The source asset is never modified. There is no in-place mode for it.
+* Nothing is saved to disk by the tool: packages are marked dirty and the artist saves them.
 * A source with no source models, no LOD0 mesh description, or no triangles is rejected with a
   specific message rather than producing an empty asset.
-* **Undo does not delete created assets.** Undo can revert level changes; new asset files must be
-  deleted from the Content Browser by hand. No asset-file rollback is implemented and none is
-  promised.
+* **Undo does not delete created assets.** New asset files must be deleted from the Content Browser
+  by hand. No asset-file rollback is implemented and none is promised.
+* "Spawn Split Actors In Level" **hides** the source actor rather than deleting it, so a bad split
+  is reversible.
 
 **Unsupported case:** if the frame and the leaf are one connected piece, no selection of whole pieces
 can separate them. The tool says so plainly and produces nothing. It does not cut arbitrary geometry
 and it never reports a separation it did not achieve.
-
-**Preview limitation:** the viewport preview draws each piece's **bounding box** — selected in green,
-retained in grey — not the triangles themselves. It is enough to identify pieces at a glance; it is
-not a shaded preview of the split.
 
 ---
 

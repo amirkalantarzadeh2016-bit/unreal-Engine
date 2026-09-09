@@ -1,8 +1,8 @@
 # Testing checklist
 
-**Nothing in this document has been executed.** No Unreal Engine 5.8 installation was available
-where this plugin was written, so the automated tests have not been compiled or run and the manual
-tests have not been performed. The lists below say what exists and what still has to be checked.
+**The plugin compiles and loads against UE 5.8**, and the extraction tool has been run on real
+architectural meshes. Beyond that, **nothing in this document has been executed**: the automated
+tests compile but have not been run, and no manual test below has been performed.
 
 ---
 
@@ -110,15 +110,41 @@ Every item below is **pending**.
 
 ### Extraction
 
-- [ ] Selected disconnected pieces extract into a new `_Leaf` asset.
+- [ ] Analyse produces the expected number of pieces on a real door, and the boxes line up with the
+      geometry in the viewport.
+- [ ] Pieces are drawn live and update the instant a group colour or assignment changes - no button
+      press, no wait.
+- [ ] Clicking a piece in the viewport puts it in the active group and recolours it immediately.
+- [ ] Ctrl-click ticks a piece without assigning it; Shift-click assigns the whole ticked set.
+- [ ] Hovering a piece in the viewport highlights its row and scrolls it into view.
+- [ ] Hovering the row's assign button highlights the piece in the viewport.
+- [ ] Deselecting the temporary editing actor stops the drawing; re-selecting it resumes.
+- [ ] **Select Similar** ticks all twelve identical mouldings from one reference piece, and does not
+      also tick unrelated pieces with a coincidentally equal triangle count.
+- [ ] All / None / Invert behave as named; Focus In Viewport frames the ticked pieces.
+- [ ] Add Group creates a third group with a distinct colour; a double door extracts to three assets.
+- [ ] Removing a group returns its pieces to the stationary bucket and does not shift other groups'
+      assignments.
+- [ ] Extraction is refused, with a clear message, when fewer than two groups have pieces.
 - [ ] The source asset is byte-identical afterwards (check it is not marked dirty).
-- [ ] Materials are preserved on both outputs, in the slots the subsets actually use.
+- [ ] Materials are preserved on every output, in the slots the subsets actually use.
 - [ ] Every UV channel survives; lightmap UV index and resolution are carried over.
-- [ ] The `_Fixed` remainder plus the `_Leaf` together equal the source with **no duplicated
-      geometry** (place both and confirm no z-fighting).
+- [ ] The outputs together equal the source with **no duplicated geometry** (place them all and
+      confirm no z-fighting).
 - [ ] A welded frame-and-leaf mesh produces the clear unsupported-case message and no output.
 - [ ] The LOD0-only and collision notes appear after a successful extraction.
+- [ ] **Re-editability:** close the tool, re-open it on the same mesh, Analyse - the previous
+      assignments come back and the status line reports how many matched.
+- [ ] Change one piece's group and extract again: the **same assets are rewritten**, actors already
+      placed in the level pick up the change, and no second set of assets appears.
+- [ ] Extracting into a multi-LOD target falls back to a new asset and says so in the notes.
+- [ ] Re-importing the source mesh is reported as unmatched pieces rather than silently
+      mis-assigning them.
+- [ ] Spawn Split Actors places one actor per group exactly on the source transform, sets movable
+      groups to Movable mobility, and hides the source actor.
 - [ ] Undo after extraction does not delete the asset files (documented, not a bug).
+- [ ] Closing the tab destroys the temporary editing actor; it never appears in a saved level.
+- [ ] Turning off viewport hover tracking stops the hit-proxy polling.
 
 ### Obstruction
 

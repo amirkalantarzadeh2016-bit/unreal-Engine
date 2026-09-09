@@ -2,10 +2,13 @@
 
 #include "ArchOpeningExtractionSubsystem.h"
 
+#include "ArchOpeningExtractionProfile.h"
 #include "ArchOpeningLog.h"
+#include "ArchOpeningPieceSetComponent.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshSourceData.h"
 #include "IAssetTools.h"
@@ -231,18 +234,28 @@ bool UArchOpeningExtractionSubsystem::AnalyzeMesh(UStaticMesh* SourceMesh, float
 		}
 	}
 
-	// Vertex counts per piece, for the selection list.
+	// Vertex counts, and the stable key each piece is identified by from here on.
 	for (FArchOpeningMeshPiece& Piece : OutAnalysis.Pieces)
 	{
 		TSet<int32> UniqueVertices;
+		int32 LowestTriangleId = TNumericLimits<int32>::Max();
+
 		for (int32 RawTriangleId : Piece.TriangleIds)
 		{
+			LowestTriangleId = FMath::Min(LowestTriangleId, RawTriangleId);
+
 			for (const FVertexInstanceID InstanceID : SourceDescription->GetTriangleVertexInstances(FTriangleID(RawTriangleId)))
 			{
 				UniqueVertices.Add(SourceDescription->GetVertexInstanceVertex(InstanceID).GetValue());
 			}
 		}
+
 		Piece.VertexCount = UniqueVertices.Num();
+
+		// Display order is not stable (pieces are sorted by size, and ties are arbitrary), so saved
+		// assignments key off this instead of an index. Triangle ids come from the source asset and
+		// do not move, so the lowest one in a connected set names that set.
+		Piece.Key = Piece.TriangleIds.IsEmpty() ? INDEX_NONE : LowestTriangleId;
 	}
 
 	// Largest first: the frame is usually the biggest piece, and the leaf the next one down.
@@ -268,14 +281,8 @@ bool UArchOpeningExtractionSubsystem::AnalyzeMesh(UStaticMesh* SourceMesh, float
 	return true;
 }
 
-FText UArchOpeningExtractionSubsystem::DescribePiece(const FArchOpeningMeshAnalysis& Analysis, int32 PieceIndex)
+FText UArchOpeningExtractionSubsystem::DescribePiece(const FArchOpeningPieceRecord& Piece, int32 PieceIndex)
 {
-	if (!Analysis.Pieces.IsValidIndex(PieceIndex))
-	{
-		return FText::GetEmpty();
-	}
-
-	const FArchOpeningMeshPiece& Piece = Analysis.Pieces[PieceIndex];
 	const FVector Size = Piece.LocalBounds.IsValid ? Piece.LocalBounds.GetSize() : FVector::ZeroVector;
 
 	FString Slots;
@@ -289,14 +296,49 @@ FText UArchOpeningExtractionSubsystem::DescribePiece(const FArchOpeningMeshAnaly
 	}
 
 	return FText::Format(
-		LOCTEXT("PieceFmt", "Piece {0}   {1} tris, {2} verts   size {3} x {4} x {5} cm   materials: {6}"),
+		LOCTEXT("PieceFmt", "Piece {0}   {1} tris   {2} x {3} x {4} cm   [{5}]"),
 		FText::AsNumber(PieceIndex),
 		FText::AsNumber(Piece.TriangleCount),
-		FText::AsNumber(Piece.VertexCount),
 		FText::AsNumber(FMath::RoundToInt(Size.X)),
 		FText::AsNumber(FMath::RoundToInt(Size.Y)),
 		FText::AsNumber(FMath::RoundToInt(Size.Z)),
-		FText::FromString(Slots.IsEmpty() ? TEXT("none") : Slots));
+		FText::FromString(Slots.IsEmpty() ? TEXT("no material") : Slots));
+}
+
+void UArchOpeningExtractionSubsystem::PopulatePieceSet(
+	UArchOpeningPieceSetComponent* PieceSet,
+	const FArchOpeningMeshAnalysis& Analysis,
+	UStaticMesh* SourceMesh,
+	UStaticMeshComponent* SourceComponent) const
+{
+	if (PieceSet == nullptr)
+	{
+		return;
+	}
+
+	PieceSet->SourceMesh = SourceMesh;
+	PieceSet->SourceComponent = SourceComponent;
+	PieceSet->WeldTolerance = Analysis.WeldTolerance;
+
+	PieceSet->InitializeDefaultGroups();
+
+	PieceSet->Pieces.Reset(Analysis.Pieces.Num());
+	for (const FArchOpeningMeshPiece& Piece : Analysis.Pieces)
+	{
+		FArchOpeningPieceRecord& Record = PieceSet->Pieces.AddDefaulted_GetRef();
+		Record.Key = Piece.Key;
+		Record.TriangleCount = Piece.TriangleCount;
+		Record.VertexCount = Piece.VertexCount;
+		Record.LocalBounds = Piece.LocalBounds;
+		Record.MaterialSlots = Piece.MaterialSlots;
+
+		// Everything starts stationary, so the classification is complete from the first frame and
+		// the fixed asset is simply whatever the artist never moved out of that bucket.
+		Record.GroupIndex = 0;
+	}
+
+	PieceSet->ClearSelection();
+	PieceSet->HoveredPieceIndex = INDEX_NONE;
 }
 
 namespace ArchOpeningExtraction
@@ -408,6 +450,92 @@ namespace ArchOpeningExtraction
 		}
 	}
 
+	/** Applies build settings, geometry, materials and collision to a static mesh asset. */
+	bool PopulateStaticMeshAsset(
+		UStaticMesh* TargetMesh,
+		UStaticMesh* SourceMesh,
+		FMeshDescription& Description,
+		const TArray<FName>& UsedSlotNames,
+		EArchOpeningExtractionCollision CollisionOption,
+		FText& OutError)
+	{
+		if (TargetMesh->GetNumSourceModels() == 0)
+		{
+			TargetMesh->AddSourceModel();
+		}
+
+		FStaticMeshSourceModel& TargetSourceModel = TargetMesh->GetSourceModel(0);
+
+		// Start from the source's build settings so lightmap and UV behaviour carries over, then
+		// force normals and tangents to be kept rather than rebuilt: they were copied exactly.
+		if (SourceMesh->GetNumSourceModels() > 0)
+		{
+			TargetSourceModel.BuildSettings = SourceMesh->GetSourceModel(0).BuildSettings;
+		}
+		TargetSourceModel.BuildSettings.bRecomputeNormals = false;
+		TargetSourceModel.BuildSettings.bRecomputeTangents = false;
+
+		FMeshDescription* TargetDescription = TargetMesh->CreateMeshDescription(0);
+		if (TargetDescription == nullptr)
+		{
+			OutError = LOCTEXT("DescriptionFailed", "Could not create a mesh description on the asset.");
+			return false;
+		}
+
+		*TargetDescription = MoveTemp(Description);
+		TargetMesh->CommitMeshDescription(0);
+
+		// Material slots, in the order the subset actually uses them.
+		TargetMesh->GetStaticMaterials().Empty(UsedSlotNames.Num());
+
+		for (const FName& SlotName : UsedSlotNames)
+		{
+			UMaterialInterface* Material = nullptr;
+
+			for (const FStaticMaterial& SourceMaterial : SourceMesh->GetStaticMaterials())
+			{
+				if (SourceMaterial.MaterialSlotName == SlotName)
+				{
+					Material = SourceMaterial.MaterialInterface;
+					break;
+				}
+			}
+
+			TargetMesh->GetStaticMaterials().Add(FStaticMaterial(Material, SlotName, SlotName));
+		}
+
+		TargetMesh->SetLightMapCoordinateIndex(SourceMesh->GetLightMapCoordinateIndex());
+		TargetMesh->SetLightMapResolution(SourceMesh->GetLightMapResolution());
+		TargetMesh->SetNaniteSettings(SourceMesh->GetNaniteSettings());
+
+		// Collision. Simple collision primitives are deliberately NOT copied: a convex hull or box
+		// authored for the whole source shape would be wrong for a subset of it.
+		TargetMesh->CreateBodySetup();
+		if (UBodySetup* BodySetup = TargetMesh->GetBodySetup())
+		{
+			switch (CollisionOption)
+			{
+			case EArchOpeningExtractionCollision::UseComplexAsSimple:
+				BodySetup->CollisionTraceFlag = CTF_UseComplexAsSimple;
+				break;
+
+			case EArchOpeningExtractionCollision::None:
+				BodySetup->CollisionTraceFlag = CTF_UseDefault;
+				BodySetup->DefaultInstance.SetCollisionEnabled(ECollisionEnabled::NoCollision);
+				break;
+
+			case EArchOpeningExtractionCollision::CopySourceFlag:
+				if (const UBodySetup* SourceBodySetup = SourceMesh->GetBodySetup())
+				{
+					BodySetup->CollisionTraceFlag = SourceBodySetup->CollisionTraceFlag;
+				}
+				break;
+			}
+		}
+
+		return true;
+	}
+
 	/** Creates one static mesh asset from a mesh description. Returns nullptr on failure. */
 	UStaticMesh* CreateStaticMeshAsset(
 		UStaticMesh* SourceMesh,
@@ -442,72 +570,9 @@ namespace ArchOpeningExtraction
 		NewMesh->InitResources();
 		NewMesh->SetLightingGuid();
 
-		FStaticMeshSourceModel& NewSourceModel = NewMesh->AddSourceModel();
-
-		// Start from the source's build settings so lightmap and UV behaviour carries over, then
-		// force normals and tangents to be kept rather than rebuilt: they were copied exactly.
-		if (SourceMesh->GetNumSourceModels() > 0)
+		if (!PopulateStaticMeshAsset(NewMesh, SourceMesh, Description, UsedSlotNames, CollisionOption, OutError))
 		{
-			NewSourceModel.BuildSettings = SourceMesh->GetSourceModel(0).BuildSettings;
-		}
-		NewSourceModel.BuildSettings.bRecomputeNormals = false;
-		NewSourceModel.BuildSettings.bRecomputeTangents = false;
-
-		FMeshDescription* TargetDescription = NewMesh->CreateMeshDescription(0);
-		if (TargetDescription == nullptr)
-		{
-			OutError = LOCTEXT("DescriptionFailed", "Could not create a mesh description on the new asset.");
 			return nullptr;
-		}
-
-		*TargetDescription = MoveTemp(Description);
-		NewMesh->CommitMeshDescription(0);
-
-		// Material slots, in the order the subset actually uses them.
-		for (const FName& SlotName : UsedSlotNames)
-		{
-			UMaterialInterface* Material = nullptr;
-
-			for (const FStaticMaterial& SourceMaterial : SourceMesh->GetStaticMaterials())
-			{
-				if (SourceMaterial.MaterialSlotName == SlotName)
-				{
-					Material = SourceMaterial.MaterialInterface;
-					break;
-				}
-			}
-
-			FStaticMaterial NewMaterial(Material, SlotName, SlotName);
-			NewMesh->GetStaticMaterials().Add(NewMaterial);
-		}
-
-		NewMesh->SetLightMapCoordinateIndex(SourceMesh->GetLightMapCoordinateIndex());
-		NewMesh->SetLightMapResolution(SourceMesh->GetLightMapResolution());
-		NewMesh->SetNaniteSettings(SourceMesh->GetNaniteSettings());
-
-		// Collision. Simple collision primitives are deliberately NOT copied: a convex hull or box
-		// authored for the whole source shape would be wrong for a subset of it.
-		NewMesh->CreateBodySetup();
-		if (UBodySetup* BodySetup = NewMesh->GetBodySetup())
-		{
-			switch (CollisionOption)
-			{
-			case EArchOpeningExtractionCollision::UseComplexAsSimple:
-				BodySetup->CollisionTraceFlag = CTF_UseComplexAsSimple;
-				break;
-
-			case EArchOpeningExtractionCollision::None:
-				BodySetup->CollisionTraceFlag = CTF_UseDefault;
-				BodySetup->DefaultInstance.SetCollisionEnabled(ECollisionEnabled::NoCollision);
-				break;
-
-			case EArchOpeningExtractionCollision::CopySourceFlag:
-				if (const UBodySetup* SourceBodySetup = SourceMesh->GetBodySetup())
-				{
-					BodySetup->CollisionTraceFlag = SourceBodySetup->CollisionTraceFlag;
-				}
-				break;
-			}
 		}
 
 		NewMesh->Build(/*bInSilent*/ true);
@@ -518,15 +583,60 @@ namespace ArchOpeningExtraction
 
 		return NewMesh;
 	}
+
+	/**
+	 * Rewrites an asset a previous extraction produced.
+	 *
+	 * Refuses anything with more than one LOD: the tool only ever writes single-LOD assets, so a
+	 * multi-LOD asset is not one of ours and rewriting only its LOD0 would leave the others showing
+	 * stale geometry. The caller falls back to creating a new asset and says so.
+	 */
+	UStaticMesh* UpdateStaticMeshAsset(
+		UStaticMesh* TargetMesh,
+		UStaticMesh* SourceMesh,
+		FMeshDescription& Description,
+		const TArray<FName>& UsedSlotNames,
+		EArchOpeningExtractionCollision CollisionOption,
+		FText& OutError)
+	{
+		if (TargetMesh == nullptr || TargetMesh == SourceMesh)
+		{
+			OutError = LOCTEXT("BadUpdateTarget", "The asset to update is missing, or is the source mesh itself.");
+			return nullptr;
+		}
+
+		if (TargetMesh->GetNumSourceModels() > 1)
+		{
+			OutError = FText::Format(
+				LOCTEXT("MultiLodUpdateFmt", "'{0}' has more than one LOD, so it was not written in place."),
+				FText::FromString(TargetMesh->GetName()));
+			return nullptr;
+		}
+
+		TargetMesh->Modify();
+		TargetMesh->PreEditChange(nullptr);
+
+		if (!PopulateStaticMeshAsset(TargetMesh, SourceMesh, Description, UsedSlotNames, CollisionOption, OutError))
+		{
+			return nullptr;
+		}
+
+		TargetMesh->Build(/*bInSilent*/ true);
+		TargetMesh->PostEditChange();
+		TargetMesh->MarkPackageDirty();
+
+		return TargetMesh;
+	}
 }
 
-bool UArchOpeningExtractionSubsystem::ExtractPieces(
+bool UArchOpeningExtractionSubsystem::ExtractGroups(
 	UStaticMesh* SourceMesh,
 	const FArchOpeningMeshAnalysis& Analysis,
-	const TArray<int32>& SelectedPieceIndices,
+	const TArray<FArchOpeningGroupExtractionRequest>& Requests,
 	const FString& PackagePath,
 	const FString& BaseAssetName,
 	EArchOpeningExtractionCollision CollisionOption,
+	bool bUpdateExistingAssets,
 	FArchOpeningExtractionResult& OutResult,
 	FText& OutError) const
 {
@@ -540,23 +650,34 @@ bool UArchOpeningExtractionSubsystem::ExtractPieces(
 		return false;
 	}
 
-	if (SelectedPieceIndices.IsEmpty())
-	{
-		OutError = LOCTEXT("NoSelection", "No pieces are selected. Tick the pieces that make up the movable leaf.");
-		return false;
-	}
-
-	if (SelectedPieceIndices.Num() >= Analysis.Pieces.Num())
-	{
-		OutError = LOCTEXT("SelectedEverything", "Every piece is selected, which would leave nothing behind as the fixed part. Deselect the frame and the fixed glazing.");
-		return false;
-	}
-
 	if (!FPackageName::IsValidLongPackageName(PackagePath / TEXT("Probe")))
 	{
 		OutError = FText::Format(
 			LOCTEXT("BadPathFmt", "'{0}' is not a valid content path. Use something like /Game/Openings."),
 			FText::FromString(PackagePath));
+		return false;
+	}
+
+	// Groups with no pieces produce no asset: an empty "Movable Leaf 2" left over from an
+	// experiment must not write an empty mesh.
+	TArray<const FArchOpeningGroupExtractionRequest*> PopulatedRequests;
+	for (const FArchOpeningGroupExtractionRequest& Request : Requests)
+	{
+		if (!Request.PieceIndices.IsEmpty())
+		{
+			PopulatedRequests.Add(&Request);
+		}
+	}
+
+	if (PopulatedRequests.IsEmpty())
+	{
+		OutError = LOCTEXT("NoGroups", "No group has any pieces assigned to it.");
+		return false;
+	}
+
+	if (PopulatedRequests.Num() == 1)
+	{
+		OutError = LOCTEXT("OneGroupOnly", "Every piece is in one group, so there is nothing to separate. Assign the leaf's pieces to a movable group.");
 		return false;
 	}
 
@@ -567,59 +688,99 @@ bool UArchOpeningExtractionSubsystem::ExtractPieces(
 		return false;
 	}
 
-	// Split the triangle set in two. Doing it as sets rather than by re-walking adjacency means the
-	// two outputs are exactly complementary: no triangle is duplicated between them, so the retained
-	// geometry cannot visually double up with the extracted leaf.
-	TSet<int32> SelectedTriangles;
-	TSet<int32> RemainderTriangles;
-
-	for (int32 PieceIndex = 0; PieceIndex < Analysis.Pieces.Num(); ++PieceIndex)
-	{
-		const bool bSelected = SelectedPieceIndices.Contains(PieceIndex);
-		TSet<int32>& Destination = bSelected ? SelectedTriangles : RemainderTriangles;
-
-		for (int32 RawTriangleId : Analysis.Pieces[PieceIndex].TriangleIds)
-		{
-			Destination.Add(RawTriangleId);
-		}
-	}
-
-	FMeshDescription SelectedDescription;
-	TArray<FName> SelectedSlots;
-	BuildSubsetDescription(*SourceDescription, SelectedTriangles, Analysis.NumUVChannels, SelectedDescription, SelectedSlots);
-
-	FMeshDescription RemainderDescription;
-	TArray<FName> RemainderSlots;
-	BuildSubsetDescription(*SourceDescription, RemainderTriangles, Analysis.NumUVChannels, RemainderDescription, RemainderSlots);
-
 	const FString CleanBaseName = BaseAssetName.IsEmpty() ? SourceMesh->GetName() : BaseAssetName;
 
-	UStaticMesh* ExtractedMesh = CreateStaticMeshAsset(
-		SourceMesh, SelectedDescription, SelectedSlots, PackagePath,
-		CleanBaseName + TEXT("_Leaf"), CollisionOption, OutError);
+	bool bAnyFallbackToNewAsset = false;
 
-	if (ExtractedMesh == nullptr)
+	for (const FArchOpeningGroupExtractionRequest* Request : PopulatedRequests)
 	{
-		return false;
+		// Triangle sets are built per group from the piece decomposition, so no triangle can land
+		// in two outputs: the results are exactly complementary and the retained geometry cannot
+		// visually double up with an extracted leaf.
+		TSet<int32> Triangles;
+		for (int32 PieceIndex : Request->PieceIndices)
+		{
+			if (!Analysis.Pieces.IsValidIndex(PieceIndex))
+			{
+				continue;
+			}
+
+			for (int32 RawTriangleId : Analysis.Pieces[PieceIndex].TriangleIds)
+			{
+				Triangles.Add(RawTriangleId);
+			}
+		}
+
+		if (Triangles.IsEmpty())
+		{
+			continue;
+		}
+
+		FArchOpeningGroupExtractionOutput Output;
+		Output.GroupName = Request->GroupName;
+		Output.Role = Request->Role;
+		Output.TriangleCount = Triangles.Num();
+
+		UStaticMesh* ResultMesh = nullptr;
+
+		// Rewriting the asset this group produced last time is what keeps a correction cheap: every
+		// actor already placed in the level keeps pointing at the same mesh and simply updates.
+		if (bUpdateExistingAssets && !Request->ExistingAsset.IsNull())
+		{
+			if (UStaticMesh* Existing = Request->ExistingAsset.LoadSynchronous())
+			{
+				FMeshDescription Description;
+				TArray<FName> UsedSlots;
+				BuildSubsetDescription(*SourceDescription, Triangles, Analysis.NumUVChannels, Description, UsedSlots);
+
+				FText UpdateError;
+				ResultMesh = UpdateStaticMeshAsset(Existing, SourceMesh, Description, UsedSlots, CollisionOption, UpdateError);
+
+				if (ResultMesh != nullptr)
+				{
+					Output.bUpdatedInPlace = true;
+				}
+				else
+				{
+					// Say why, then fall through and create a fresh asset rather than losing the work.
+					OutResult.Notes.Add(UpdateError);
+					bAnyFallbackToNewAsset = true;
+				}
+			}
+		}
+
+		if (ResultMesh == nullptr)
+		{
+			// A separate description: the one above was moved from if the in-place path ran.
+			FMeshDescription Description;
+			TArray<FName> UsedSlots;
+			BuildSubsetDescription(*SourceDescription, Triangles, Analysis.NumUVChannels, Description, UsedSlots);
+
+			const FString Suffix = (Request->Role == EArchOpeningGroupRole::Stationary)
+				? TEXT("_Fixed")
+				: FString::Printf(TEXT("_%s"), *Request->GroupName.ToString().Replace(TEXT(" "), TEXT("")));
+
+			ResultMesh = CreateStaticMeshAsset(
+				SourceMesh, Description, UsedSlots, PackagePath,
+				CleanBaseName + Suffix, CollisionOption, OutError);
+		}
+
+		if (ResultMesh == nullptr)
+		{
+			OutError = FText::Format(
+				LOCTEXT("GroupFailedFmt", "Group '{0}' could not be written: {1}"),
+				FText::FromName(Request->GroupName), OutError);
+			return false;
+		}
+
+		Output.Mesh = ResultMesh;
+		OutResult.Groups.Add(Output);
+
+		UE_LOG(LogArchOpenings, Log,
+			TEXT("Extraction: group '%s' -> '%s' (%d triangles, %s)."),
+			*Request->GroupName.ToString(), *ResultMesh->GetPathName(), Output.TriangleCount,
+			Output.bUpdatedInPlace ? TEXT("updated in place") : TEXT("new asset"));
 	}
-
-	UStaticMesh* RemainderMesh = CreateStaticMeshAsset(
-		SourceMesh, RemainderDescription, RemainderSlots, PackagePath,
-		CleanBaseName + TEXT("_Fixed"), CollisionOption, OutError);
-
-	if (RemainderMesh == nullptr)
-	{
-		// The leaf asset already exists at this point; say so rather than leaving it a mystery.
-		OutError = FText::Format(
-			LOCTEXT("PartialFmt", "The leaf asset '{0}' was created but the fixed-part asset failed: {1}"),
-			FText::FromString(ExtractedMesh->GetName()), OutError);
-		return false;
-	}
-
-	OutResult.ExtractedMesh = ExtractedMesh;
-	OutResult.RemainderMesh = RemainderMesh;
-	OutResult.ExtractedTriangles = SelectedTriangles.Num();
-	OutResult.RemainderTriangles = RemainderTriangles.Num();
 
 	// Everything the artist has to know about what the output does and does not carry.
 	OutResult.Notes.Add(LOCTEXT("NoteSourceUntouched",
@@ -629,19 +790,150 @@ bool UArchOpeningExtractionSubsystem::ExtractPieces(
 	OutResult.Notes.Add(LOCTEXT("NoteNormals",
 		"Positions, normals, tangents, binormal signs, vertex colours and every UV channel were copied verbatim, and the build was told not to recompute normals or tangents."));
 	OutResult.Notes.Add(LOCTEXT("NoteLightmap",
-		"Lightmap UV index, lightmap resolution, Nanite settings and the source's build settings were copied. Generated lightmap UVs are rebuilt by the build for each new asset, so they will not match the source's packing."));
+		"Lightmap UV index, lightmap resolution, Nanite settings and the source's build settings were copied. Generated lightmap UVs are rebuilt by the build for each asset, so they will not match the source's packing."));
 	OutResult.Notes.Add(LOCTEXT("NoteCollision",
-		"Simple collision primitives were NOT copied: a hull authored for the whole source shape would be wrong for a subset. Collision on the new assets follows the option you chose."));
+		"Simple collision primitives were NOT copied: a hull authored for the whole source shape would be wrong for a subset. Collision follows the option you chose."));
 	OutResult.Notes.Add(LOCTEXT("NoteSockets",
 		"Sockets and any custom asset metadata on the source were not carried over."));
 	OutResult.Notes.Add(LOCTEXT("NoteUndo",
-		"Undo does not delete these asset files. Undo can revert level changes, but newly created assets must be deleted from the Content Browser by hand. The packages are marked dirty and are not saved until you save them."));
+		"Undo does not delete created assets. Undo can revert level changes, but newly created assets must be deleted from the Content Browser by hand. Packages are marked dirty and are not saved until you save them."));
 
-	UE_LOG(LogArchOpenings, Log,
-		TEXT("Extracted %d triangles into '%s' and %d triangles into '%s' from '%s'."),
-		OutResult.ExtractedTriangles, *ExtractedMesh->GetPathName(),
-		OutResult.RemainderTriangles, *RemainderMesh->GetPathName(),
-		*SourceMesh->GetPathName());
+	if (bAnyFallbackToNewAsset)
+	{
+		OutResult.Notes.Add(LOCTEXT("NoteFallback",
+			"One or more groups could not be written in place and were created as new assets instead. Actors still pointing at the old assets will need re-assigning."));
+	}
+
+	return true;
+}
+
+// -------------------------------------------------------------------------------------------
+// Profiles
+// -------------------------------------------------------------------------------------------
+
+FString UArchOpeningExtractionSubsystem::MakeProfilePackageName(const UStaticMesh* SourceMesh)
+{
+	if (!::IsValid(SourceMesh))
+	{
+		return FString();
+	}
+
+	const FString SourcePackage = SourceMesh->GetOutermost()->GetName();
+	const FString Directory = FPackageName::GetLongPackagePath(SourcePackage);
+
+	return Directory / (SourceMesh->GetName() + UArchOpeningExtractionProfile::GetProfileSuffix());
+}
+
+UArchOpeningExtractionProfile* UArchOpeningExtractionSubsystem::FindProfileFor(const UStaticMesh* SourceMesh) const
+{
+	const FString PackageName = MakeProfilePackageName(SourceMesh);
+	if (PackageName.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	const FString AssetName = FPackageName::GetLongPackageAssetName(PackageName);
+	const FString ObjectPath = PackageName + TEXT(".") + AssetName;
+
+	// LoadObject rather than a registry query: the profile may have been created this session and
+	// not yet saved, in which case it is in memory but not in the asset registry's on-disk view.
+	return LoadObject<UArchOpeningExtractionProfile>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+}
+
+UArchOpeningExtractionProfile* UArchOpeningExtractionSubsystem::SaveProfile(const UArchOpeningPieceSetComponent* PieceSet, FText& OutError) const
+{
+	if (PieceSet == nullptr || !::IsValid(PieceSet->SourceMesh))
+	{
+		OutError = LOCTEXT("NoProfileSource", "There is no source mesh to save a profile for.");
+		return nullptr;
+	}
+
+	const FString PackageName = MakeProfilePackageName(PieceSet->SourceMesh);
+	if (PackageName.IsEmpty() || !FPackageName::IsValidLongPackageName(PackageName))
+	{
+		OutError = LOCTEXT("BadProfilePath", "The source mesh is not in a valid content path, so no profile can be written next to it.");
+		return nullptr;
+	}
+
+	const FString AssetName = FPackageName::GetLongPackageAssetName(PackageName);
+
+	UArchOpeningExtractionProfile* Profile = FindProfileFor(PieceSet->SourceMesh);
+
+	if (Profile == nullptr)
+	{
+		UPackage* Package = CreatePackage(*PackageName);
+		if (Package == nullptr)
+		{
+			OutError = FText::Format(
+				LOCTEXT("ProfilePackageFailedFmt", "Could not create the package '{0}'."), FText::FromString(PackageName));
+			return nullptr;
+		}
+
+		Profile = NewObject<UArchOpeningExtractionProfile>(Package, *AssetName, RF_Public | RF_Standalone);
+		if (Profile == nullptr)
+		{
+			OutError = LOCTEXT("ProfileFailed", "Could not create the extraction profile asset.");
+			return nullptr;
+		}
+
+		FAssetRegistryModule::AssetCreated(Profile);
+	}
+
+	Profile->Modify();
+	Profile->SourceMesh = PieceSet->SourceMesh;
+	Profile->WeldTolerance = PieceSet->WeldTolerance;
+	Profile->Groups = PieceSet->Groups;
+	Profile->PieceCountAtSave = PieceSet->Pieces.Num();
+
+	Profile->PieceKeyToGroup.Reset();
+	for (const FArchOpeningPieceRecord& Piece : PieceSet->Pieces)
+	{
+		if (Piece.Key != INDEX_NONE)
+		{
+			Profile->PieceKeyToGroup.Add(Piece.Key, Piece.GroupIndex);
+		}
+	}
+
+	Profile->MarkPackageDirty();
+
+	return Profile;
+}
+
+bool UArchOpeningExtractionSubsystem::ApplyProfileTo(
+	UArchOpeningPieceSetComponent* PieceSet,
+	const UArchOpeningExtractionProfile* Profile,
+	int32& OutMatched,
+	int32& OutUnmatched) const
+{
+	OutMatched = 0;
+	OutUnmatched = 0;
+
+	if (PieceSet == nullptr || Profile == nullptr || Profile->Groups.IsEmpty())
+	{
+		return false;
+	}
+
+	PieceSet->Groups = Profile->Groups;
+	PieceSet->ActiveGroupIndex = FMath::Clamp(PieceSet->ActiveGroupIndex, 0, PieceSet->Groups.Num() - 1);
+
+	for (FArchOpeningPieceRecord& Piece : PieceSet->Pieces)
+	{
+		// Matched by key, not by index, so a re-analysis that orders the pieces differently still
+		// restores the right assignments.
+		const int32* SavedGroup = Profile->PieceKeyToGroup.Find(Piece.Key);
+
+		if (SavedGroup != nullptr && PieceSet->Groups.IsValidIndex(*SavedGroup))
+		{
+			Piece.GroupIndex = *SavedGroup;
+			++OutMatched;
+		}
+		else
+		{
+			// A piece the profile has never seen: leave it stationary rather than guessing.
+			Piece.GroupIndex = 0;
+			++OutUnmatched;
+		}
+	}
 
 	return true;
 }

@@ -5,6 +5,8 @@
 #include "ArchOpeningComponent.h"
 #include "ArchOpeningComponentDetails.h"
 #include "ArchOpeningComponentVisualizer.h"
+#include "ArchOpeningPieceSetComponent.h"
+#include "ArchOpeningPieceSetVisualizer.h"
 #include "ArchOpeningLog.h"
 #include "ArchOpeningPreviewManager.h"
 #include "SArchOpeningExtractionPanel.h"
@@ -52,12 +54,18 @@ void FArchitecturalOpeningsEditorModule::StartupModule()
 		bRegisteredDetails = true;
 	}
 
-	// Viewport visualization of hinge, axis, outside arrow, arc, slide path and trigger volume.
+	// Viewport visualization of hinge, axis, outside arrow, arc, slide path and trigger volume,
+	// plus the extraction tool's live, clickable piece boxes.
 	if (GUnrealEd != nullptr)
 	{
 		GUnrealEd->RegisterComponentVisualizer(
 			UArchOpeningComponent::StaticClass()->GetFName(),
 			MakeShared<FArchOpeningComponentVisualizer>());
+
+		GUnrealEd->RegisterComponentVisualizer(
+			UArchOpeningPieceSetComponent::StaticClass()->GetFName(),
+			MakeShared<FArchOpeningPieceSetVisualizer>());
+
 		bRegisteredVisualizer = true;
 	}
 
@@ -105,6 +113,7 @@ void FArchitecturalOpeningsEditorModule::ShutdownModule()
 	if (bRegisteredVisualizer && GUnrealEd != nullptr)
 	{
 		GUnrealEd->UnregisterComponentVisualizer(UArchOpeningComponent::StaticClass()->GetFName());
+		GUnrealEd->UnregisterComponentVisualizer(UArchOpeningPieceSetComponent::StaticClass()->GetFName());
 		bRegisteredVisualizer = false;
 	}
 

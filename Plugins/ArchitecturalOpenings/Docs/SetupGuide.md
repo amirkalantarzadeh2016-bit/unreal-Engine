@@ -297,6 +297,40 @@ its transforms are written with `TeleportPhysics`.
 
 ---
 
+## Leaf extraction, when the leaf is inside one mesh
+
+Open it with **Window > Opening Leaf Extraction**.
+
+1. Select the Static Mesh Actor in the level, press **Use Selected Static Mesh**, then
+   **Analyse Pieces**. A temporary "Opening Piece Editing" actor appears and the mesh's connected
+   pieces are drawn as coloured boxes.
+2. The **Groups** list starts with `Stationary Frame` and `Movable Leaf 1`. Press **Add Group...**
+   for a second leaf (a double door) or one per panel (a folding door). Each group has its own
+   colour, and every group holding pieces becomes exactly one asset.
+3. Press **Make Active** on the group you are filling, then **click pieces in the viewport** to put
+   them in it. Ctrl-click ticks a piece without assigning; Shift-click adds it to the ticked set and
+   assigns the whole set at once.
+4. For repeated parts - twelve identical mouldings - tick one, press **Select Similar**, then
+   **Assign Ticked** on the target group. Similar matches triangle count plus bounding size,
+   ignoring orientation. **All / None / Invert** are there too, and **Focus In Viewport** frames the
+   ticked pieces.
+5. **Create / Update Group Assets** writes one asset per populated group and saves the assignments
+   into a profile next to the source mesh. Come back later and the tool restores them, so fixing one
+   piece is a click and a re-extract, not a redo.
+6. **Spawn Split Actors In Level** places one actor per group on the source's exact transform and
+   hides the source. Movable groups are set Movable; stationary groups keep the source's mobility.
+   From there, select them and assign them to an opening exactly as in step 2 and 3 above.
+
+Keep the temporary editing actor selected while you work: component visualizers only draw for a
+selected actor, so clicking elsewhere in the level makes the boxes disappear until you select it
+again. The temporary actor is transient and is destroyed when the tool closes.
+
+If the analysis reports a single piece, the frame and leaf are welded together and no selection of
+whole pieces can separate them. That case is not supported; separate the leaf in your modelling
+package and re-import. See `Limitations.md`.
+
+---
+
 ## Presets
 
 Create one with **Content Browser > Miscellaneous > Data Asset > Architectural Opening Preset**.
