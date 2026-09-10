@@ -20,7 +20,9 @@
 #if WITH_EDITOR
 #include "EngineUtils.h"
 #include "Engine/Texture2D.h"
-#include "Kismet/KismetRenderingLibrary.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "TextureResource.h"
+#include "UObject/Package.h"
 #endif
 
 AMinimapBoundsVolume::AMinimapBoundsVolume()
@@ -1002,21 +1004,97 @@ void AMinimapBoundsVolume::SaveCaptureAsStaticTexture()
 	PackagePath.RemoveFromEnd(TEXT("/"));
 	const FString FullName = FString::Printf(TEXT("%s/%s"), *PackagePath, *AssetName);
 
-	// Bakes the render target into a real UTexture2D asset. Editor only by nature - it
-	// creates a package. VectorDisplacementmap keeps the pixels unaltered, which matters
-	// for a map: a lossy compression setting would smear thin architectural lines.
-	UTexture2D* Baked = UKismetRenderingLibrary::RenderTargetCreateStaticTexture2DEditorOnly(
-		Capture->GetMinimapRenderTarget(),
-		FullName,
-		TextureCompressionSettings::TC_Default,
-		TextureMipGenSettings::TMGS_NoMipmaps);
+	// --- Read the pixels back -------------------------------------------
+	// Building the texture from CPU pixels rather than calling
+	// RenderTargetCreateStaticTexture2DEditorOnly is deliberate. That helper derives the
+	// source gamma space and the per-mip gamma space independently, and when they diverge
+	// the texture build fires:
+	//
+	//   Assertion failed: MipView.GammaSpace == LayerData.SourceGammaSpace
+	//   [TextureDerivedDataTask.cpp]
+	//
+	// Here there is exactly ONE mip and ONE layer, and the sRGB flag is declared once to
+	// match how the bytes are actually encoded, so those two values come from the same
+	// declaration and cannot disagree.
+	UTextureRenderTarget2D* RenderTarget = Capture->GetMinimapRenderTarget();
+	FTextureRenderTargetResource* Resource = RenderTarget->GameThread_GetRenderTargetResource();
+	if (!Resource)
+	{
+		UE_LOG(LogMinimap, Error,
+			TEXT("'%s': the render target has no RHI resource yet; capture again before baking."),
+			*GetName());
+		return;
+	}
+
+	TArray<FColor> Pixels;
+
+	// The capture target stores sRGB-encoded bytes (RTF_RGBA8_SRGB), so ask for them
+	// verbatim. Leaving the default linear-to-gamma conversion on would encode a second
+	// time and wash the map out.
+	FReadSurfaceDataFlags ReadFlags(RCM_UNorm);
+	ReadFlags.SetLinearToGamma(false);
+
+	if (!Resource->ReadPixels(Pixels, ReadFlags) || Pixels.Num() == 0)
+	{
+		UE_LOG(LogMinimap, Error, TEXT("'%s': could not read the render target back."), *GetName());
+		return;
+	}
+
+	const int32 Width  = RenderTarget->SizeX;
+	const int32 Height = RenderTarget->SizeY;
+	if (Pixels.Num() != Width * Height)
+	{
+		UE_LOG(LogMinimap, Error,
+			TEXT("'%s': read %d pixels but expected %dx%d = %d. Aborting rather than writing a "
+			     "malformed asset."), *GetName(), Pixels.Num(), Width, Height, Width * Height);
+		return;
+	}
+
+	// --- Package and asset ------------------------------------------------
+	UPackage* Package = CreatePackage(*FullName);
+	if (!Package)
+	{
+		UE_LOG(LogMinimap, Error, TEXT("'%s': could not create package '%s'."), *GetName(), *FullName);
+		return;
+	}
+	Package->FullyLoad();
+
+	// Reuse an existing asset of the same name so re-baking updates in place instead of
+	// leaving a trail of T_Minimap_X_1, _2, _3.
+	UTexture2D* Baked = FindObject<UTexture2D>(Package, *AssetName);
+	const bool bCreatedNew = (Baked == nullptr);
+	if (bCreatedNew)
+	{
+		Baked = NewObject<UTexture2D>(Package, FName(*AssetName), RF_Public | RF_Standalone);
+	}
 
 	if (!Baked)
 	{
-		UE_LOG(LogMinimap, Error,
-			TEXT("'%s': failed to create a static texture at '%s'. Check the path is a valid "
-			     "content directory."), *GetName(), *FullName);
+		UE_LOG(LogMinimap, Error, TEXT("'%s': could not create texture '%s'."), *GetName(), *FullName);
 		return;
+	}
+
+	Baked->Modify();
+
+	// FColor is B,G,R,A in memory, so TSF_BGRA8 matches the readback with no shuffling.
+	Baked->Source.Init(Width, Height, /*NumSlices=*/1, /*NumMips=*/1, TSF_BGRA8,
+		reinterpret_cast<const uint8*>(Pixels.GetData()));
+
+	// The single gamma declaration the whole build derives from.
+	Baked->SRGB = bStaticTextureSRGB;
+	Baked->CompressionSettings = StaticTextureCompression;
+	Baked->MipGenSettings = StaticTextureMipGen;
+	Baked->AddressX = TA_Clamp;
+	Baked->AddressY = TA_Clamp;
+	Baked->NeverStream = true;
+
+	Baked->UpdateResource();
+	Baked->PostEditChange();
+
+	Package->MarkPackageDirty();
+	if (bCreatedNew)
+	{
+		FAssetRegistryModule::AssetCreated(Baked);
 	}
 
 	Modify();
@@ -1036,9 +1114,12 @@ void AMinimapBoundsVolume::SaveCaptureAsStaticTexture()
 	}
 
 	UE_LOG(LogMinimap, Log,
-		TEXT("'%s': saved capture as static texture '%s'%s"),
-		*GetName(), *Baked->GetPathName(),
-		bSwitchToStaticAfterSave ? TEXT(" and switched Background Source to Static Texture.") : TEXT("."));
+		TEXT("'%s': baked %dx%d capture into '%s' (%s, sRGB=%s)%s The package is DIRTY - "
+		     "save it (Ctrl+S or File > Save All) to keep it."),
+		*GetName(), Width, Height, *Baked->GetPathName(),
+		bCreatedNew ? TEXT("new asset") : TEXT("updated in place"),
+		bStaticTextureSRGB ? TEXT("true") : TEXT("false"),
+		bSwitchToStaticAfterSave ? TEXT(" Background Source switched to Static Texture.") : TEXT(""));
 }
 
 void AMinimapBoundsVolume::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)

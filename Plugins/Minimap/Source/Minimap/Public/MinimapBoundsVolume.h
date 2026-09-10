@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Engine/TextureDefines.h"
 #include "MinimapCaptureTypes.h"
 #include "MinimapTypes.h"
 #include "MinimapBoundsVolume.generated.h"
@@ -181,6 +182,29 @@ public:
 	/** Switch this instance to Static Texture mode after a successful save. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background")
 	bool bSwitchToStaticAfterSave = true;
+
+	/**
+	 * Compression for the baked texture. TC_Default is compressed and small; thin
+	 * architectural lines survive better with TC_VectorDisplacementmap, which is
+	 * uncompressed - but that setting also forces sRGB off, so untick Static Texture SRGB
+	 * to match or the image comes out washed out.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background|Bake")
+	TEnumAsByte<TextureCompressionSettings> StaticTextureCompression = TC_Default;
+
+	/** Mip generation for the baked texture. A minimap is drawn at one size, so none. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background|Bake")
+	TEnumAsByte<TextureMipGenSettings> StaticTextureMipGen = TMGS_NoMipmaps;
+
+	/**
+	 * Declares that the baked pixels are sRGB-encoded.
+	 *
+	 * MUST match how the capture render target stores them, or the texture build asserts
+	 * on a gamma-space mismatch. The capture uses RTF_RGBA8_SRGB unless Capture Alpha is
+	 * on, so leave this ticked in the normal case.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Background|Bake")
+	bool bStaticTextureSRGB = true;
 
 	/** Level-specific actors hidden from the minimap capture only (roofs, ceilings). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Capture|Visibility")

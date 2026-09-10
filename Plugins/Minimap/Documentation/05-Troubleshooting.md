@@ -53,6 +53,34 @@ The sampler is being asked for a UV outside `[0,1]` and **wraps**. Three defence
 
 ---
 
+## Crash when baking to a static texture
+
+```
+Assertion failed: MipView.GammaSpace == LayerData.SourceGammaSpace
+[TextureDerivedDataTask.cpp] [Line: 423]
+```
+
+A gamma-space mismatch inside the texture build. The plugin no longer uses
+`RenderTargetCreateStaticTexture2DEditorOnly`, which derived the source gamma and the
+per-mip gamma independently and could produce two values that disagree. The bake now reads
+the render target back and builds the texture from CPU pixels with **one mip, one layer,
+and a single sRGB declaration** — so those two values come from the same declaration.
+
+If it still asserts, the sRGB declaration does not match how the bytes are encoded:
+
+| Capture setting | `Static Texture SRGB` |
+|---|---|
+| `bCaptureAlpha` **off** (RT is `RTF_RGBA8_SRGB`) | **ticked** |
+| `bCaptureAlpha` **on** (RT is `RTF_RGBA8`, linear) | **unticked** |
+
+`TC_VectorDisplacementmap` also forces sRGB off in the engine, so pair it with
+`Static Texture SRGB` unticked or the map comes out washed out.
+
+**The baked package is left DIRTY on purpose** — press Ctrl+S or *File → Save All* to keep
+it. Re-baking updates the same asset in place rather than creating `_1`, `_2`, `_3`.
+
+---
+
 ## Markers do not line up with the image
 
 | Symptom | Cause |

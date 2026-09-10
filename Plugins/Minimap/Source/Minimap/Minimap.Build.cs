@@ -24,7 +24,12 @@ public class Minimap : ModuleRules
 			new string[]
 			{
 				"Slate",
-				"SlateCore"
+				"SlateCore",
+
+				// Used only by the editor-guarded static-texture bake, to register the
+				// created asset. AssetRegistry is itself a Runtime module, so this does
+				// not pull editor code into a packaged build.
+				"AssetRegistry"
 			});
 
 		// No editor-only modules: AMinimapBoundsVolume's editor helpers are guarded by

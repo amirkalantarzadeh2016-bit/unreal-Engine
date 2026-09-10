@@ -35,6 +35,17 @@ That is an axis *swap*, not a sign flip — the invert flags cannot express it.
 > convention is a *mirror*, which no camera orientation can reproduce, so automatic capture
 > refuses to activate and validation reports it. Sign flips are fine in pairs.
 
+### Static texture bake
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `StaticTextureSavePath` | **/Game/Minimap/Generated** | Where the baked asset goes. |
+| `StaticTextureAssetName` | empty | Defaults to `T_Minimap_<LevelName>`, so two levels cannot overwrite each other. |
+| `bSwitchToStaticAfterSave` | **true** | Switch this instance to Static Texture mode after baking. |
+| `StaticTextureCompression` | **TC_Default** | `TC_VectorDisplacementmap` is uncompressed and keeps thin lines crisp, but forces sRGB off — untick `bStaticTextureSRGB` to match. |
+| `StaticTextureMipGen` | **TMGS_NoMipmaps** | A minimap draws at one size. |
+| `bStaticTextureSRGB` | **true** | ⚠️ Must match how the capture stores bytes. Tick for the normal `RTF_RGBA8_SRGB` capture; untick when `bCaptureAlpha` is on. A mismatch asserts in the texture build. |
+
 ### Bounds fitting
 
 | Setting | Default | Meaning |
