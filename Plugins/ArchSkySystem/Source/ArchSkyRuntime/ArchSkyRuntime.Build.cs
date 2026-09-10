@@ -43,7 +43,16 @@ public class ArchSkyRuntime : ModuleRules
 				"DeveloperSettings",
 
 				// Compact quantised net serialisation of FArchSkyReplicatedState.
-				"NetCore"
+				"NetCore",
+
+				// ARCH NOTE: an addition to the originally specified dependency list.
+				// PART 6 requires runtime presets to be stored "as JSON in SavedGames",
+				// and FJsonObjectConverter - the only reflection-driven struct/JSON bridge
+				// in the engine - lives in JsonUtilities. Hand-rolling the serialisation to
+				// avoid the dependency would mean re-listing every FArchSkyState field by
+				// hand and silently dropping any field added later. JsonUtilities is a
+				// Runtime module and packages on every platform.
+				"JsonUtilities"
 			});
 
 		// Enables IWYU-style compilation on 5.4+ without tripping the

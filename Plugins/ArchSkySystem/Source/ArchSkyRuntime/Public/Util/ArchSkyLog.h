@@ -31,7 +31,7 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky Subsystem Tick"), STAT_ArchSky_Subsystem
  * Used for "your scene is missing X" style complaints that would otherwise spam
  * a per-frame log at 120 Hz.
  */
-#define ARCHSKY_LOG_ONCE(Verbosity, Format, ...) \
+#define ARCHSKY_LOG_ONCE(Verbosity, ...) \
 	do \
 	{ \
 		/* Block-scoped, so each call site gets its own flag without token pasting. */ \
@@ -39,6 +39,6 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky Subsystem Tick"), STAT_ArchSky_Subsystem
 		if (!bArchSkyLoggedOnce) \
 		{ \
 			bArchSkyLoggedOnce = true; \
-			UE_LOG(LogArchSky, Verbosity, Format, ##__VA_ARGS__); \
+			UE_LOG(LogArchSky, Verbosity, __VA_ARGS__); \
 		} \
 	} while (0)
