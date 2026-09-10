@@ -635,6 +635,24 @@ void AArchSkyDirector::DiscoverExistingSceneActors()
 // Tick
 // ---------------------------------------------------------------------------------------
 
+bool AArchSkyDirector::NeedsWeatherReapply(const FArchSkyState& State) const
+{
+	return !bHasAppliedWeather
+		|| State.WeatherPresetA != LastAppliedWeatherA
+		|| State.WeatherPresetB != LastAppliedWeatherB
+		|| !FMath::IsNearlyEqual(State.WeatherBlendAlpha, LastAppliedWeatherAlpha, UE_KINDA_SMALL_NUMBER)
+		|| State.Location != LastAppliedLocation;
+}
+
+void AArchSkyDirector::RecordAppliedWeather(const FArchSkyState& State)
+{
+	LastAppliedWeatherA = State.WeatherPresetA;
+	LastAppliedWeatherB = State.WeatherPresetB;
+	LastAppliedWeatherAlpha = State.WeatherBlendAlpha;
+	LastAppliedLocation = State.Location;
+	bHasAppliedWeather = true;
+}
+
 void AArchSkyDirector::HandleSkyStateChanged(const FArchSkyState& NewState)
 {
 	// ARCH NOTE: this handler does NOT apply anything. It only records what became stale.
@@ -644,6 +662,16 @@ void AArchSkyDirector::HandleSkyStateChanged(const FArchSkyState& NewState)
 	DirtyFlags |= EArchSkyDirtyFlags::Lights;
 	DirtyFlags |= EArchSkyDirtyFlags::MaterialParams;
 	DirtyFlags |= EArchSkyDirtyFlags::Clouds;
+
+	// Atmosphere and fog are expensive enough to be worth gating, but gating them on
+	// "a transition is running" would miss an instant weather change and the final frame
+	// of a timed one. Compare against what was actually last applied instead.
+	if (NeedsWeatherReapply(NewState))
+	{
+		DirtyFlags |= EArchSkyDirtyFlags::Atmosphere;
+		DirtyFlags |= EArchSkyDirtyFlags::Fog;
+		DirtyFlags |= EArchSkyDirtyFlags::SkyLight;
+	}
 }
 
 void AArchSkyDirector::Tick(float DeltaSeconds)
@@ -699,6 +727,9 @@ void AArchSkyDirector::Tick(float DeltaSeconds)
 		ApplyFog(Weather);
 		EnumRemoveFlags(DirtyFlags, EArchSkyDirtyFlags::Fog);
 	}
+
+	// Both weather-driven subsystems are now in sync with this state.
+	RecordAppliedWeather(State);
 
 	// --- Clouds: throttled to CloudUpdateInterval ---
 	SecondsSinceCloudUpdate += DeltaSeconds;
@@ -1374,6 +1405,7 @@ void AArchSkyDirector::RefreshEditorPreview()
 	ApplySkyLight(Weather, Subsystem->GetSolarPosition());
 	ApplyMaterialParameters(State, Subsystem->GetSolarPosition(), Subsystem->GetLunarPosition(), Weather);
 
+	RecordAppliedWeather(State);
 	DirtyFlags = EArchSkyDirtyFlags::None;
 }
 

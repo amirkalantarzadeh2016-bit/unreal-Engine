@@ -320,6 +320,12 @@ private:
 	/** 0 at MoonFadeOutEnd, 1 at MoonFadeOutStart, smoothly interpolated between. */
 	float ComputeMoonWeight(double SunAltitudeDegrees) const;
 
+	/** True when the weather or location differs from what atmosphere and fog last saw. */
+	bool NeedsWeatherReapply(const FArchSkyState& State) const;
+
+	/** Records the weather and location just pushed, so the next comparison is meaningful. */
+	void RecordAppliedWeather(const FArchSkyState& State);
+
 	/** Resolves and caches the material parameter collection configured in the settings. */
 	UMaterialParameterCollection* GetParameterCollection();
 
@@ -373,6 +379,21 @@ private:
 
 	/** Rotation currently applied to the sun light, cached for GetSunLightRotation. */
 	FRotator CurrentSunRotation = FRotator::ZeroRotator;
+
+	/**
+	 * The weather and location identity last pushed to the atmosphere and fog.
+	 *
+	 * ARCH NOTE: atmosphere and fog are applied on weather/location change only, never per
+	 * frame. "A transition is running" is NOT a sufficient trigger on its own: a zero-second
+	 * weather change completes instantly, so there is no transition to observe, and the
+	 * completion frame of a timed transition also lands after the transition has ended.
+	 * Comparing against what was last applied catches all three cases with one rule.
+	 */
+	FName LastAppliedWeatherA = NAME_None;
+	FName LastAppliedWeatherB = NAME_None;
+	float LastAppliedWeatherAlpha = -1.f;
+	FArchGeoLocation LastAppliedLocation;
+	bool bHasAppliedWeather = false;
 
 	/** True once BindToSubsystem has succeeded. */
 	bool bBoundToSubsystem = false;
