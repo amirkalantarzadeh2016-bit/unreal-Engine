@@ -344,7 +344,14 @@ bool UMinimapCaptureComponent::ProbeRenderTarget(float& OutMeanLuminance, float&
 	}
 
 	TArray<FColor> Pixels;
-	if (!Resource->ReadPixels(Pixels) || Pixels.Num() == 0)
+
+	// Match the bake exactly: the target stores sRGB-encoded bytes, so read them verbatim.
+	// Letting ReadPixels apply linear-to-gamma again would report luminance for an image
+	// that is not the one actually saved.
+	FReadSurfaceDataFlags ReadFlags(RCM_UNorm);
+	ReadFlags.SetLinearToGamma(false);
+
+	if (!Resource->ReadPixels(Pixels, ReadFlags) || Pixels.Num() == 0)
 	{
 		OutSummary = TEXT("ReadPixels returned nothing - the render target could not be read back.");
 		return false;

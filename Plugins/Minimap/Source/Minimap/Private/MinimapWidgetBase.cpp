@@ -355,8 +355,17 @@ void UMinimapWidgetBase::UpdateMarkerWidgets(const TArray<FMinimapMarkerSnapshot
 	const FVector2D MapSize = GetMapWidgetSize();
 	int32 UsedWidgets = 0;
 
-	for (const FMinimapMarkerSnapshot& Snapshot : Snapshots)
+	// Iterate HIGHEST priority first.
+	//
+	// The subsystem sorts snapshots priority-ASCENDING, so the most important markers sit
+	// at the END of the array. Walking forwards and breaking at MaxMarkerWidgets therefore
+	// kept the least important markers and dropped the most important ones - the exact
+	// opposite of the intent. Walking backwards makes the cap drop the least important,
+	// and ZOrder below still puts high priority on top.
+	for (int32 Index = Snapshots.Num() - 1; Index >= 0; --Index)
 	{
+		const FMinimapMarkerSnapshot& Snapshot = Snapshots[Index];
+
 		if (!Snapshot.bVisible || !IsValid(Snapshot.Tracked))
 		{
 			continue;
@@ -364,8 +373,7 @@ void UMinimapWidgetBase::UpdateMarkerWidgets(const TArray<FMinimapMarkerSnapshot
 
 		if (MaxMarkerWidgets > 0 && UsedWidgets >= MaxMarkerWidgets)
 		{
-			// Snapshots arrive priority-ascending, so anything dropped here is the least
-			// important. Break rather than continue: everything after is lower priority.
+			// Everything still unprocessed is lower priority than what we already placed.
 			break;
 		}
 
@@ -381,9 +389,9 @@ void UMinimapWidgetBase::UpdateMarkerWidgets(const TArray<FMinimapMarkerSnapshot
 		{
 			CanvasSlot->SetPosition(UMinimapFunctionLibrary::NormalizedToWidgetPixels(Snapshot.Clamped, MapSize));
 
-			// Higher priority markers are later in the array, so a rising ZOrder puts
-			// them on top without a second sort.
-			CanvasSlot->SetZOrder(UsedWidgets);
+			// Processed highest-first, so a descending ZOrder keeps the most important
+			// marker drawn on top.
+			CanvasSlot->SetZOrder(Snapshots.Num() - UsedWidgets);
 		}
 
 		Widget->SetVisibility(ESlateVisibility::HitTestInvisible);
@@ -677,6 +685,13 @@ void UMinimapWidgetBase::UpdateCardinalIndicators()
 {
 	const UMinimapViewComponent* View = BoundView.Get();
 	if (!View)
+	{
+		return;
+	}
+
+	// This runs every frame, so bail before touching anything when the widget has no
+	// compass art at all - which is the common case for a plain minimap.
+	if (!CompassRing && !North_Container && !South_Container && !East_Container && !West_Container)
 	{
 		return;
 	}

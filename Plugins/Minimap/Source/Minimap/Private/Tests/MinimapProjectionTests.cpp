@@ -714,6 +714,142 @@ bool FMinimapConversionRoundTripTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// 13. Compass: map yaw, calibration offset, and wrap behaviour
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMinimapCompassTest,
+	"Minimap.Rotation.Compass",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMinimapCompassTest::RunTest(const FString& Parameters)
+{
+	using namespace MinimapTestUtils;
+
+	// The indicator shows where world NORTH sits on screen, clockwise-positive from up.
+	TestEqual(TEXT("Facing north, north is up"),
+		UMinimapFunctionLibrary::GetCompassAngleEx(0.0f, 0.0f, 0.0f), 0.0f, Tolerance);
+	TestEqual(TEXT("Facing east, north is to the left"),
+		UMinimapFunctionLibrary::GetCompassAngleEx(90.0f, 0.0f, 0.0f), -90.0f, Tolerance);
+	TestEqual(TEXT("Facing west, north is to the right"),
+		UMinimapFunctionLibrary::GetCompassAngleEx(270.0f, 0.0f, 0.0f), 90.0f, Tolerance);
+	TestEqual(TEXT("Facing south, north is at the bottom"),
+		FMath::Abs(UMinimapFunctionLibrary::GetCompassAngleEx(180.0f, 0.0f, 0.0f)), 180.0f, Tolerance);
+
+	// A map drawn at an angle moves where north appears; ignoring MapYaw leaves the
+	// indicator wrong by exactly that angle, which is the bug this argument covers.
+	TestEqual(TEXT("A plan drawn 40 deg clockwise puts north 40 deg counter-clockwise"),
+		UMinimapFunctionLibrary::GetCompassAngleEx(0.0f, 40.0f, 0.0f), -40.0f, Tolerance);
+	TestEqual(TEXT("Map yaw composes with view yaw"),
+		UMinimapFunctionLibrary::GetCompassAngleEx(90.0f, 40.0f, 0.0f), -130.0f, Tolerance);
+
+	// The calibration dial shifts the indicator by exactly its value, at every heading.
+	for (float ViewYaw = -360.0f; ViewYaw <= 360.0f; ViewYaw += 17.0f)
+	{
+		const float Base    = UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, 0.0f, 0.0f);
+		const float Offset  = UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, 0.0f, 40.0f);
+		const float Applied = FRotator::NormalizeAxis(Offset - Base);
+
+		if (FMath::Abs(Applied - 40.0f) > 0.01f)
+		{
+			AddError(FString::Printf(
+				TEXT("Offset was not applied uniformly at view yaw %.1f: got %.3f, expected 40."),
+				ViewYaw, Applied));
+			break;
+		}
+	}
+
+	// Equal and opposite map yaw and offset must cancel exactly.
+	for (float ViewYaw = 0.0f; ViewYaw < 360.0f; ViewYaw += 23.0f)
+	{
+		TestEqual(TEXT("Map yaw and an equal offset cancel"),
+			UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, 40.0f, 40.0f),
+			UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, 0.0f, 0.0f), Tolerance);
+	}
+
+	// Never unbounded, whatever it is fed.
+	for (float ViewYaw = -1080.0f; ViewYaw <= 1080.0f; ViewYaw += 31.0f)
+	{
+		for (const float MapYaw : { -180.0f, -40.0f, 0.0f, 40.0f, 180.0f })
+		{
+			const float Angle = UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, MapYaw, 40.0f);
+			if (!(Angle > -180.1f && Angle <= 180.1f))
+			{
+				AddError(FString::Printf(TEXT("Compass angle %.2f out of range at yaw %.1f, map %.1f"),
+					Angle, ViewYaw, MapYaw));
+				return false;
+			}
+		}
+	}
+
+	// The legacy single-argument form must keep behaving exactly as it did.
+	for (float ViewYaw = -360.0f; ViewYaw <= 360.0f; ViewYaw += 29.0f)
+	{
+		TestEqual(TEXT("Legacy GetCompassAngle is unchanged"),
+			UMinimapFunctionLibrary::GetCompassAngle(ViewYaw),
+			UMinimapFunctionLibrary::GetCompassAngleEx(ViewYaw, 0.0f, 0.0f), Tolerance);
+	}
+
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// 14. Marker priority ordering - the contract the widget's cap depends on
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FMinimapPriorityOrderTest,
+	"Minimap.Markers.PriorityOrdering",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FMinimapPriorityOrderTest::RunTest(const FString& Parameters)
+{
+	// The subsystem sorts snapshots priority-ASCENDING and trims from the FRONT, so the
+	// most important markers survive and sit at the END of the array. The widget must
+	// therefore walk BACKWARDS when capping, or it drops exactly the markers it should
+	// keep - which is the bug this pins down.
+	TArray<FMinimapMarkerSnapshot> Snapshots;
+	for (const int32 Priority : { 5, 1, 9, 3, 7 })
+	{
+		FMinimapMarkerSnapshot Snapshot;
+		Snapshot.Priority = Priority;
+		Snapshots.Add(Snapshot);
+	}
+
+	Snapshots.StableSort([](const FMinimapMarkerSnapshot& A, const FMinimapMarkerSnapshot& B)
+	{
+		return A.Priority < B.Priority;
+	});
+
+	TestEqual(TEXT("Lowest priority is first"), Snapshots[0].Priority, 1);
+	TestEqual(TEXT("Highest priority is last"), Snapshots.Last().Priority, 9);
+
+	// Subsystem budget: trimming the front keeps the important ones.
+	TArray<FMinimapMarkerSnapshot> Budgeted = Snapshots;
+	const int32 Budget = 3;
+	Budgeted.RemoveAt(0, Budgeted.Num() - Budget, EAllowShrinking::No);
+	TestEqual(TEXT("Budget keeps three"), Budgeted.Num(), Budget);
+	TestEqual(TEXT("Budget kept the highest"), Budgeted.Last().Priority, 9);
+	TestEqual(TEXT("Budget dropped the lowest"), Budgeted[0].Priority, 5);
+
+	// Widget cap: walking backwards must take the highest first.
+	TArray<int32> TakenByWidget;
+	const int32 MaxWidgets = 2;
+	for (int32 Index = Snapshots.Num() - 1; Index >= 0 && TakenByWidget.Num() < MaxWidgets; --Index)
+	{
+		TakenByWidget.Add(Snapshots[Index].Priority);
+	}
+	TestEqual(TEXT("Widget took the two highest"), TakenByWidget.Num(), 2);
+	TestEqual(TEXT("Widget took 9 first"), TakenByWidget[0], 9);
+	TestEqual(TEXT("Widget took 7 second"), TakenByWidget[1], 7);
+
+	// The forward walk that used to be there would have taken 1 and 3 - the least
+	// important markers on the map.
+	TestTrue(TEXT("Backward walk differs from the forward walk"),
+		TakenByWidget[0] != Snapshots[0].Priority);
+
+	return true;
+}
+
 #undef MINIMAP_TEST_VECTOR_EQUAL
 
 #endif // WITH_DEV_AUTOMATION_TESTS

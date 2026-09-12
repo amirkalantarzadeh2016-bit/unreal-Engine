@@ -104,6 +104,27 @@ it. Re-baking updates the same asset in place rather than creating `_1`, `_2`, `
 
 ---
 
+## Multiple minimap views
+
+Markers are re-projected per view, but each marker's **dirty state is resolved once per
+update pass** and shared. Resolving it inside the per-view loop would let whichever view
+ran first consume the flag, leaving later views — including the primary one — reusing a
+stale snapshot.
+
+The tracked component's own delegates still report the **primary view only**, because a
+marker has a different position in every view. For a secondary view, bind
+`OnMinimapViewUpdated`.
+
+## Marker priority
+
+The subsystem sorts snapshots **priority-ascending** and trims from the front, so the most
+important markers survive and sit at the end. Anything consuming that array and applying
+its own cap must walk it **backwards**, or it keeps the least important markers and drops
+the ones that mattered.
+
+`MaxMarkersPerView` (subsystem) and `MaxMarkerWidgets` (widget) both keep the highest
+priority.
+
 ## Performance
 
 | Symptom | Fix |

@@ -223,6 +223,28 @@ public:
 	void ForceUpdate();
 
 private:
+	/**
+	 * One marker's transform for a single update pass, with its dirty state already
+	 * resolved.
+	 *
+	 * The dirty check LATCHES the transform it accepts, so it may only be consumed once
+	 * per pass. Evaluating it inside the per-view loop meant that with two or more views
+	 * the first view consumed the flag and every later view - including the primary one -
+	 * saw the marker as clean and reused a stale snapshot. Resolving it once here and
+	 * sharing the result fixes that, and also drops the per-marker transform reads from
+	 * one per view to one per pass.
+	 */
+	struct FMinimapMarkerUpdate
+	{
+		UMinimapTrackedComponent* Marker = nullptr;
+		FVector WorldLocation = FVector::ZeroVector;
+		float WorldYaw = 0.0f;
+		bool bDirty = false;
+	};
+
+	/** Resolve every registered marker's transform and dirty state, once per pass. */
+	void GatherMarkerUpdates();
+
 	/** Bound to the active provider's capture delegate; re-broadcasts to widgets. */
 	UFUNCTION()
 	void HandleBackgroundCaptured(UMinimapCaptureComponent* Capture, UTextureRenderTarget2D* RenderTarget);
@@ -252,6 +274,13 @@ private:
 
 	/** Scratch buffer reused across passes to keep the update allocation-free. */
 	TArray<FMinimapMarkerSnapshot> SnapshotScratch;
+
+	/**
+	 * Marker transforms for the pass in flight. Raw pointers are safe because the array is
+	 * built and consumed inside one synchronous call and cleared before returning, so no
+	 * garbage collection can run while it holds them.
+	 */
+	TArray<FMinimapMarkerUpdate> MarkerUpdateScratch;
 
 	float TickInterval = 1.0f / 30.0f;
 	float TimeAccumulator = 0.0f;

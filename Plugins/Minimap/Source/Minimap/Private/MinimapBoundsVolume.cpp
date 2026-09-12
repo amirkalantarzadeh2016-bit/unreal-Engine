@@ -84,6 +84,12 @@ void AMinimapBoundsVolume::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 	if (IsValid(CaptureComponent))
 	{
+		// Drop the subsystem's reference before the resources go, so nothing can broadcast
+		// a render target that is about to be released.
+		if (UMinimapSubsystem* BackgroundSubsystem = UMinimapSubsystem::Get(this))
+		{
+			BackgroundSubsystem->UnregisterBackgroundProvider(CaptureComponent);
+		}
 		CaptureComponent->ReleaseCaptureResources();
 	}
 	CaptureComponent = nullptr;
@@ -898,27 +904,36 @@ void AMinimapBoundsVolume::FitToGeometryBounds()
 		const double LowTarget  = TotalWeight * Trim;
 		const double HighTarget = TotalWeight * (1.0 - Trim);
 
-		double Accumulated = 0.0;
-		OutMin = Sorted[0].Box.Min[Axis];
-		OutMax = Sorted.Last().Box.Max[Axis];
+		// Union the boxes of every RETAINED component, rather than taking the bounds of
+		// whichever component happened to straddle the percentile cut. Sorting is by
+		// centre, so a retained component with a large extent can reach further out than
+		// the one at the cut - reading only the cut component would clip it off.
+		OutMin = TNumericLimits<double>::Max();
+		OutMax = TNumericLimits<double>::Lowest();
 
-		bool bFoundLow = (Trim <= 0.0);
+		double Accumulated = 0.0;
+		bool bRetainedAny = false;
+
 		for (const FGeometryEntry& Entry : Sorted)
 		{
 			const double Before = Accumulated;
 			Accumulated += Entry.Weight;
 
-			if (!bFoundLow && Accumulated >= LowTarget)
+			// Retained when the component's share of the mass overlaps the kept window.
+			// With Trim == 0 this keeps everything, which is the intended no-op.
+			if (Accumulated > LowTarget && Before < HighTarget)
 			{
-				// Keep this component whole: trimming should exclude outliers, never
-				// slice through a wall that survived the cut.
-				OutMin = Entry.Box.Min[Axis];
-				bFoundLow = true;
+				OutMin = FMath::Min(OutMin, Entry.Box.Min[Axis]);
+				OutMax = FMath::Max(OutMax, Entry.Box.Max[Axis]);
+				bRetainedAny = true;
 			}
-			if (Before < HighTarget && Accumulated >= HighTarget)
-			{
-				OutMax = Entry.Box.Max[Axis];
-			}
+		}
+
+		if (!bRetainedAny)
+		{
+			// Degenerate trim settings must not produce an inverted range.
+			OutMin = Sorted[0].Box.Min[Axis];
+			OutMax = Sorted.Last().Box.Max[Axis];
 		}
 	};
 

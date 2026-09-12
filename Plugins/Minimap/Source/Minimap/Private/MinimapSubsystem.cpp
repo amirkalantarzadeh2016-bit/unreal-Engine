@@ -358,6 +358,9 @@ void UMinimapSubsystem::UpdateAllViews(bool bForceFullUpdate)
 	const UMinimapViewComponent* PrimaryView = GetPrimaryView();
 	const bool bCalibrationChanged = bCalibrationDirty || bForceFullUpdate;
 
+	// Resolve every marker's transform and dirty state ONCE, before any view consumes it.
+	GatherMarkerUpdates();
+
 	// Copy because a delegate fired mid-loop could legally register or unregister a view;
 	// iterating the live array would then invalidate the iterator.
 	TArray<TWeakObjectPtr<UMinimapViewComponent>> ViewsSnapshot = Views;
@@ -382,15 +385,15 @@ void UMinimapSubsystem::UpdateAllViews(bool bForceFullUpdate)
 		UpdateMarkersForView(*View, bViewDirty, bIsPrimary, bForceFullUpdate);
 	}
 
+	// Do not hold raw marker pointers across frames.
+	MarkerUpdateScratch.Reset();
+
 	bCalibrationDirty = false;
 }
 
-bool UMinimapSubsystem::UpdateMarkersForView(UMinimapViewComponent& View, bool bViewDirty, bool bIsPrimary, bool bForceFullUpdate)
+void UMinimapSubsystem::GatherMarkerUpdates()
 {
-	const bool bFullRebuild = bViewDirty || bForceFullUpdate;
-
-	SnapshotScratch.Reset(Markers.Num());
-	bool bAnythingChanged = bFullRebuild;
+	MarkerUpdateScratch.Reset(Markers.Num());
 
 	for (const TWeakObjectPtr<UMinimapTrackedComponent>& WeakMarker : Markers)
 	{
@@ -406,16 +409,36 @@ bool UMinimapSubsystem::UpdateMarkersForView(UMinimapViewComponent& View, bool b
 			continue;
 		}
 
-		const FVector WorldLocation = Owner->GetActorLocation();
-		const float WorldYaw = static_cast<float>(Owner->GetActorRotation().Yaw);
+		FMinimapMarkerUpdate Entry;
+		Entry.Marker = Marker;
+		Entry.WorldLocation = Owner->GetActorLocation();
+		Entry.WorldYaw = static_cast<float>(Owner->GetActorRotation().Yaw);
 
-		// The dirty check must be consumed for every marker on every pass, otherwise a
-		// marker's latched transform would drift out of sync with reality.
-		const bool bMarkerDirty = Marker->CheckAndConsumeDirty(WorldLocation, WorldYaw);
+		// Consumed exactly once per pass; every view then shares the answer.
+		Entry.bDirty = Marker->CheckAndConsumeDirty(Entry.WorldLocation, Entry.WorldYaw);
+
+		MarkerUpdateScratch.Add(Entry);
+	}
+}
+
+bool UMinimapSubsystem::UpdateMarkersForView(UMinimapViewComponent& View, bool bViewDirty, bool bIsPrimary, bool bForceFullUpdate)
+{
+	const bool bFullRebuild = bViewDirty || bForceFullUpdate;
+
+	SnapshotScratch.Reset(MarkerUpdateScratch.Num());
+	bool bAnythingChanged = bFullRebuild;
+
+	for (const FMinimapMarkerUpdate& Entry : MarkerUpdateScratch)
+	{
+		UMinimapTrackedComponent* Marker = Entry.Marker;
+		if (!IsValid(Marker))
+		{
+			continue;
+		}
 
 		// Reuse the cached snapshot only for the primary view: a marker's projected
 		// position differs per view, and the component only caches one of them.
-		const bool bCanReuseCache = bIsPrimary && !bFullRebuild && !bMarkerDirty && Marker->HasSnapshot();
+		const bool bCanReuseCache = bIsPrimary && !bFullRebuild && !Entry.bDirty && Marker->HasSnapshot();
 
 		if (bCanReuseCache)
 		{
@@ -423,7 +446,7 @@ bool UMinimapSubsystem::UpdateMarkersForView(UMinimapViewComponent& View, bool b
 			continue;
 		}
 
-		FMinimapMarkerSnapshot Snapshot = BuildSnapshot(*Marker, View, WorldLocation, WorldYaw);
+		FMinimapMarkerSnapshot Snapshot = BuildSnapshot(*Marker, View, Entry.WorldLocation, Entry.WorldYaw);
 
 		if (bIsPrimary)
 		{
@@ -432,7 +455,13 @@ bool UMinimapSubsystem::UpdateMarkersForView(UMinimapViewComponent& View, bool b
 		}
 
 		SnapshotScratch.Add(MoveTemp(Snapshot));
-		bAnythingChanged = true;
+
+		// A non-primary view always recomputes, so only count a genuine change here -
+		// otherwise a secondary view would broadcast on every pass with identical data.
+		if (Entry.bDirty || bFullRebuild)
+		{
+			bAnythingChanged = true;
+		}
 	}
 
 	if (!bAnythingChanged)
