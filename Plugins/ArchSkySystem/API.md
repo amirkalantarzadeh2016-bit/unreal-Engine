@@ -125,6 +125,106 @@ Bind with *Assign* / *Bind Event to…*.
 
 ---
 
+## `UArchSkyPlaybackSubsystem` — the transport
+
+```
+Get ArchSky Playback  (World Context)  →  ArchSky Playback Subsystem
+```
+
+Exists in **game and PIE worlds only** — an editor world has no playback, because the Sun
+Study details panel scrubs the same clock directly. Always null-check.
+
+`CurrentSimTime` is **minutes from midnight, 0–1440**. It is a derived view of
+`UArchSkySubsystem`'s clock (`TimeOfDayHours × 60`), not a second copy, so the transport,
+the console, the editor sliders and a replicated packet can never disagree.
+
+### Transport
+
+| Function | Notes |
+|---|---|
+| `Play` | Starts at the current speed. If looping is on and the clock is outside the window, seeks to `LoopStart` first. |
+| `Pause` | Stops the clock, keeps the position. |
+| `Stop` | Stops **and rewinds** — to `LoopStart` when looping, otherwise midnight. |
+| `TogglePlayPause` | |
+| `IsPlaying` → `bool` | Derived from the clock actually moving, so it cannot lie — even if `ArchSky.TimeScale 0` stopped it. |
+
+### Position
+
+| Function | Notes |
+|---|---|
+| `GetCurrentSimTime` → `float` | Minutes from midnight. |
+| `SetCurrentSimTime(Minutes)` | Seeks. Out-of-range values wrap. Playback state untouched, so seeking while playing continues from the new position. |
+| `GetCurrentSimTimeNormalised` → `float` | The same as a 0–1 fraction. |
+| `BeginScrub` / `EndScrub` | Suspends playback for a drag and resumes it from where the handle was released. |
+| `IsScrubbing` → `bool` | |
+
+### Speed
+
+`SpeedMultiplier` is a **ratio of simulated to real time**.
+
+| Preset | Multiplier | Advances |
+|---|---|---|
+| `RealTime` | 1 | 1 simulated second per real second |
+| `Fast` *(default)* | 60 | 1 simulated minute per real second |
+| `HourPerSecond` | 3600 | 1 simulated hour per real second |
+| `FullDayTenSeconds` | 8640 | a whole day in 10 real seconds |
+| `Custom` | — | reported when the multiplier matches no preset; never selectable |
+
+`GetSpeedMultiplier`, `SetSpeedMultiplier`, `GetSpeedPreset`, `SetSpeedPreset`,
+`GetMultiplierForPreset`, `GetSpeedPresetDisplayName`, `GetCurrentSpeedDisplayName`,
+`GetSelectableSpeedPresets`.
+
+Changing speed while playing takes effect immediately; while paused it only records the
+setting for the next `Play`.
+
+### Loop
+
+`IsLoopEnabled`, `SetLoopEnabled`, `GetLoopStart`, `GetLoopEnd`, `SetLoopRange`,
+`GetLoopCount`.
+
+`SetLoopRange` clamps both ends to [0, 1440] and **rejects** an inverted or under-one-minute
+window with a warning rather than silently swapping the ends — a zero-length loop freezes
+the sun and looks like a hang.
+
+### Step
+
+`GetStepSize`, `SetStepSize`, `StepForward`, `StepBackward`, `StepByMinutes(Delta)`.
+
+Stepping **pauses continuous playback** first, and the result is **clamped** to [0, 1440]
+rather than wrapped, so stepping back from 00:05 lands on midnight and stays there.
+
+### Display and pure helpers
+
+| Function | Notes |
+|---|---|
+| `GetFormattedSimTime(b24Hour)` → `FText` | `"HH:MM"`. |
+| `GetFormattedSimDate(bJalali)` → `FText` | The simulated date, which advances past midnight. |
+| `FormatMinutesAsClock(Minutes, b24Hour)` | **Static.** |
+| `WrapMinutes(Minutes)` | **Static.** Wraps into [0, 1440). |
+| `DidCrossWindowBoundary(Prev, Current, Start, End, bForward)` | **Static, pure.** The loop wrap test, exposed so it is unit-testable. |
+| `ApplyStepToMinutes(Current, Delta)` | **Static, pure.** The step clamp. |
+
+### Delegates
+
+| Delegate | Signature |
+|---|---|
+| `OnPlaybackStateChanged` | `(bool bIsPlaying)` |
+| `OnPlaybackLooped` | `(int32 LoopCount)` |
+| `OnPlaybackReachedEnd` | `()` — the window ended with looping off |
+| `OnPlaybackSpeedChanged` | `(float Multiplier, EArchPlaybackSpeedPreset Preset)` |
+
+### Example — loop a working day at an hour per second
+
+```
+Get ArchSky Playback
+├─ Set Loop Range   (Start = 360, End = 1080)      ← 06:00 to 18:00
+├─ Set Loop Enabled (true)
+├─ Set Speed Preset (Hour per second)
+└─ Play                                             ← 12 s per lap, forever
+```
+
+---
+
 ## `UArchSkyViewModel` — the UI layer
 
 Read the `BlueprintReadOnly` fields, call the `Command*` functions, bind
@@ -138,6 +238,13 @@ Read the `BlueprintReadOnly` fields, call the `Command*` functions, bind
 `CommandSetCalendarType`, `CommandSetUse24HourClock`, `CommandSavePreset`,
 `CommandLoadPreset`, `CommandDeletePreset`.
 
+**Playback commands:** `CommandPlay`, `CommandPause`, `CommandStop`,
+`CommandTogglePlayback`, `CommandSetSimTime`, `CommandSetSimTimeNormalised`,
+`CommandBeginScrub`, `CommandEndScrub`, `CommandStepForward`, `CommandStepBackward`,
+`CommandSetStepSize`, `CommandSetSpeedPreset`, `CommandSetSpeedMultiplier`,
+`CommandSetLoopEnabled`, `CommandSetLoopRange`, plus `GetSpeedPresetOptions` for the
+dropdown.
+
 Commands automatically route through a server RPC on a client when replication is on;
 callers need no networking code.
 
@@ -150,6 +257,11 @@ callers need no networking code.
 **Raw fields for controls:** `TimeOfDayHours`, `DayOfYear`, `NorthOffsetDegrees`,
 `TimeFlowRate`, `bIsTimePaused`, `MoonIllumination01`, `MoonIconRotationDegrees`,
 `WeatherTransitionProgress`, `CalendarType`, `bUse24HourClock`.
+
+**Playback fields:** `CurrentSimTime` (minutes, the scrubber's binding target),
+`CurrentSimTime01`, `bIsPlaying`, `PlaybackTimeText` (`HH:MM`), `PlaybackDateText`,
+`SpeedPresetText`, `SpeedMultiplier`, `SpeedPreset`, `bLoopEnabled`, `LoopStart`,
+`LoopEnd`, `LoopStart01`, `LoopEnd01`, `LoopRangeText`, `StepSize`, `StepSizeText`.
 
 **Lists:** `GetWeatherTiles`, `GetLocationOptions(Search)`, `GetSavedPresets`,
 `GetMonthNames`, `GetCurrentDateParts`, `GetTimeSliderTicks`.

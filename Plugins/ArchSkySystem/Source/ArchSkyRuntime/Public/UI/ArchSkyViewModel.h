@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/ArchSkyPlaybackTypes.h"
 #include "Core/ArchSkyState.h"
 #include "Data/ArchLocationPreset.h"
 #include "Data/ArchSkySaveGame.h"
@@ -13,6 +14,7 @@
 
 #include "ArchSkyViewModel.generated.h"
 
+class UArchSkyPlaybackSubsystem;
 class UArchSkySubsystem;
 
 /** Fired once per coalesced update. The widget rebinds everything from this one event. */
@@ -197,6 +199,74 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Weather")
 	float WeatherTransitionProgress = 1.f;
 
+	// --- Playback transport ------------------------------------------------------------
+
+	/**
+	 * Minutes from midnight, 0 .. 1440. Bind the timeline slider's value to this and route
+	 * its OnValueChanged to CommandSetSimTime for the bidirectional binding the brief asks
+	 * for. It is a derived view of the one authoritative clock, not a second copy of it.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float CurrentSimTime = 720.f;
+
+	/** CurrentSimTime as a 0..1 fraction, for a normalised slider. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float CurrentSimTime01 = 0.5f;
+
+	/** True while the clock is advancing. Drives the play/pause button's icon. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	bool bIsPlaying = false;
+
+	/** The transport clock as "HH:MM". */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	FText PlaybackTimeText;
+
+	/** The simulated date, which advances when playback runs past midnight. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	FText PlaybackDateText;
+
+	/** Speed label for beside the slider, e.g. "Hour per second (x3600)". */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	FText SpeedPresetText;
+
+	/** The raw multiplier, for a numeric entry box. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float SpeedMultiplier = 60.f;
+
+	/** Which named preset is selected, or Custom. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	EArchPlaybackSpeedPreset SpeedPreset = EArchPlaybackSpeedPreset::Fast;
+
+	/** True when reaching the loop end restarts instead of stopping. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	bool bLoopEnabled = false;
+
+	/** Loop window in minutes from midnight. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float LoopStart = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float LoopEnd = 1440.f;
+
+	/** The loop window as 0..1 fractions, for drawing the window onto the slider track. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float LoopStart01 = 0.f;
+
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float LoopEnd01 = 1.f;
+
+	/** "06:00 - 18:00", for the loop readout. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	FText LoopRangeText;
+
+	/** Minutes per press of the step buttons. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	float StepSize = 15.f;
+
+	/** "15 min", for the step buttons' labels or tooltips. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Playback")
+	FText StepSizeText;
+
 	/** Which calendar the primary date readout uses. */
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Time")
 	EArchCalendarType CalendarType = EArchCalendarType::Gregorian;
@@ -272,6 +342,72 @@ public:
 	/** Switches between 24-hour and AM/PM. */
 	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands")
 	void CommandSetUse24HourClock(bool bIn24Hour);
+
+	// --- Playback transport commands ---------------------------------------------------
+
+	/** Starts playback at the current speed. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandPlay();
+
+	/** Stops the clock where it is. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandPause();
+
+	/** Stops the clock and rewinds to the loop start, or to midnight. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandStop();
+
+	/** Play if paused, pause if playing. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandTogglePlayback();
+
+	/** Seeks the simulation. The scrubber's OnValueChanged target. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandSetSimTime(float NewSimTimeMinutes);
+
+	/** Seeks from a normalised 0..1 slider value. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandSetSimTimeNormalised(float Value01);
+
+	/** Call when the user grabs the scrubber; suspends playback for the drag. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandBeginScrub();
+
+	/** Call when the user releases the scrubber; playback resumes from the new position. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandEndScrub();
+
+	/** Adds StepSize minutes. Pauses continuous playback first. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandStepForward();
+
+	/** Subtracts StepSize minutes. Pauses continuous playback first. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandStepBackward();
+
+	/** Sets the minutes per step. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandSetStepSize(float NewStepSize);
+
+	/** Selects a named speed preset. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandSetSpeedPreset(EArchPlaybackSpeedPreset NewPreset);
+
+	/** Sets an arbitrary speed multiplier. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandSetSpeedMultiplier(float NewSpeedMultiplier);
+
+	/** Turns looping on or off. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	void CommandSetLoopEnabled(bool bEnabled);
+
+	/** Sets the loop window in minutes. Returns false if the window is empty or inverted. */
+	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands|Playback")
+	bool CommandSetLoopRange(float NewLoopStart, float NewLoopEnd);
+
+	/** Every selectable speed preset with its label, for building a dropdown. */
+	UFUNCTION(BlueprintPure, Category = "ArchSky|UI|Lists")
+	void GetSpeedPresetOptions(TArray<EArchPlaybackSpeedPreset>& OutPresets, TArray<FText>& OutLabels) const;
 
 	/** Saves the current state as a named runtime preset. */
 	UFUNCTION(BlueprintCallable, Category = "ArchSky|UI|Commands")
@@ -358,8 +494,23 @@ private:
 	/** The Director, looked up lazily, used only to reach its server RPCs. */
 	class AArchSkyDirector* FindDirector() const;
 
+	/** Bound to UArchSkyPlaybackSubsystem::OnPlaybackStateChanged. */
+	UFUNCTION()
+	void HandlePlaybackStateChanged(bool bNowPlaying);
+
+	/** Bound to UArchSkyPlaybackSubsystem::OnPlaybackSpeedChanged. */
+	UFUNCTION()
+	void HandlePlaybackSpeedChanged(float NewSpeedMultiplier, EArchPlaybackSpeedPreset NewPreset);
+
+	/** Bound to UArchSkyPlaybackSubsystem::OnPlaybackReachedEnd. */
+	UFUNCTION()
+	void HandlePlaybackReachedEnd();
+
 	/** The subsystem this ViewModel presents. */
 	TWeakObjectPtr<UArchSkySubsystem> SkySubsystem;
+
+	/** The transport this ViewModel drives. */
+	TWeakObjectPtr<UArchSkyPlaybackSubsystem> PlaybackSubsystem;
 
 	/** Cached Director, for the RPC path only. */
 	TWeakObjectPtr<class AArchSkyDirector> CachedDirector;

@@ -11,3 +11,4 @@ DEFINE_STAT(STAT_ArchSky_SkyRecapture);
 DEFINE_STAT(STAT_ArchSky_MpcWrite);
 DEFINE_STAT(STAT_ArchSky_WeatherApply);
 DEFINE_STAT(STAT_ArchSky_SubsystemTick);
+DEFINE_STAT(STAT_ArchSky_PlaybackTick);

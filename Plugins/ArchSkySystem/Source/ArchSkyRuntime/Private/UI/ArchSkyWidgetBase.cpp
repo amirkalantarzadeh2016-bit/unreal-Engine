@@ -8,6 +8,7 @@
 #include "Components/EditableTextBox.h"
 #include "Components/Slider.h"
 #include "Components/TextBlock.h"
+#include "Core/ArchSkyPlaybackSubsystem.h"
 #include "Data/ArchTimeCalendar.h"
 #include "Util/ArchSkyLog.h"
 
@@ -96,7 +97,75 @@ void UArchSkyWidgetBase::NativeOnInitialized()
 		LocationSearchBox->SetHintText(LOCTEXT("LocationSearchHint", "Search cities..."));
 	}
 
+	// --- Playback transport ---
+
+	if (TimelineSlider)
+	{
+		// The brief's 0-1440 axis, set here so a designer never has to type the numbers.
+		TimelineSlider->SetMinValue(0.f);
+		TimelineSlider->SetMaxValue(UArchSkyPlaybackSubsystem::MinutesPerDay);
+
+		TimelineSlider->OnValueChanged.AddDynamic(this, &UArchSkyWidgetBase::HandleTimelineSliderChanged);
+
+		// Capture begin/end is what makes a drag suspend playback and then resume from
+		// where the handle was released. Without them the clock advances under the
+		// pointer and the handle appears to slide away from the cursor.
+		TimelineSlider->OnMouseCaptureBegin.AddDynamic(this, &UArchSkyWidgetBase::HandleTimelineCaptureBegin);
+		TimelineSlider->OnMouseCaptureEnd.AddDynamic(this, &UArchSkyWidgetBase::HandleTimelineCaptureEnd);
+
+		TimelineSlider->SetToolTipText(LOCTEXT("TimelineTooltip",
+			"Simulation timeline, in minutes from midnight. Drag to seek; playback resumes from where you release."));
+	}
+
+	if (PlayButton)
+	{
+		PlayButton->OnClicked.AddDynamic(this, &UArchSkyWidgetBase::HandlePlayClicked);
+		PlayButton->SetToolTipText(LOCTEXT("PlayTooltip", "Start the simulation running."));
+	}
+
+	if (PauseButton)
+	{
+		PauseButton->OnClicked.AddDynamic(this, &UArchSkyWidgetBase::HandlePauseClicked);
+		PauseButton->SetToolTipText(LOCTEXT("PauseTooltip", "Stop the clock where it is."));
+	}
+
+	if (StopButton)
+	{
+		StopButton->OnClicked.AddDynamic(this, &UArchSkyWidgetBase::HandleStopClicked);
+		StopButton->SetToolTipText(LOCTEXT("StopTooltip",
+			"Stop the clock and rewind to the start of the loop window, or to midnight."));
+	}
+
+	if (StepForwardButton)
+	{
+		StepForwardButton->OnClicked.AddDynamic(this, &UArchSkyWidgetBase::HandleStepForwardClicked);
+		StepForwardButton->SetToolTipText(LOCTEXT("StepForwardTooltip",
+			"Advance by one step. Stepping pauses continuous playback."));
+	}
+
+	if (StepBackwardButton)
+	{
+		StepBackwardButton->OnClicked.AddDynamic(this, &UArchSkyWidgetBase::HandleStepBackwardClicked);
+		StepBackwardButton->SetToolTipText(LOCTEXT("StepBackwardTooltip",
+			"Go back by one step. Stepping pauses continuous playback."));
+	}
+
+	if (SpeedPresetCombo)
+	{
+		SpeedPresetCombo->OnSelectionChanged.AddDynamic(this, &UArchSkyWidgetBase::HandleSpeedPresetSelected);
+		SpeedPresetCombo->SetToolTipText(LOCTEXT("SpeedComboTooltip",
+			"How fast simulated time runs against real time."));
+	}
+
+	if (LoopToggle)
+	{
+		LoopToggle->OnCheckStateChanged.AddDynamic(this, &UArchSkyWidgetBase::HandleLoopToggled);
+		LoopToggle->SetToolTipText(LOCTEXT("LoopToggleTooltip",
+			"When on, reaching the end of the window jumps back to its start instead of stopping."));
+	}
+
 	RebuildLocationOptions();
+	RebuildSpeedPresetOptions();
 }
 
 void UArchSkyWidgetBase::NativeConstruct()
@@ -155,6 +224,41 @@ void UArchSkyWidgetBase::NativeDestruct()
 	if (LocationSearchBox)
 	{
 		LocationSearchBox->OnTextChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleLocationSearchChanged);
+	}
+
+	if (TimelineSlider)
+	{
+		TimelineSlider->OnValueChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleTimelineSliderChanged);
+		TimelineSlider->OnMouseCaptureBegin.RemoveDynamic(this, &UArchSkyWidgetBase::HandleTimelineCaptureBegin);
+		TimelineSlider->OnMouseCaptureEnd.RemoveDynamic(this, &UArchSkyWidgetBase::HandleTimelineCaptureEnd);
+	}
+	if (PlayButton)
+	{
+		PlayButton->OnClicked.RemoveDynamic(this, &UArchSkyWidgetBase::HandlePlayClicked);
+	}
+	if (PauseButton)
+	{
+		PauseButton->OnClicked.RemoveDynamic(this, &UArchSkyWidgetBase::HandlePauseClicked);
+	}
+	if (StopButton)
+	{
+		StopButton->OnClicked.RemoveDynamic(this, &UArchSkyWidgetBase::HandleStopClicked);
+	}
+	if (StepForwardButton)
+	{
+		StepForwardButton->OnClicked.RemoveDynamic(this, &UArchSkyWidgetBase::HandleStepForwardClicked);
+	}
+	if (StepBackwardButton)
+	{
+		StepBackwardButton->OnClicked.RemoveDynamic(this, &UArchSkyWidgetBase::HandleStepBackwardClicked);
+	}
+	if (SpeedPresetCombo)
+	{
+		SpeedPresetCombo->OnSelectionChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleSpeedPresetSelected);
+	}
+	if (LoopToggle)
+	{
+		LoopToggle->OnCheckStateChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleLoopToggled);
 	}
 
 	Super::NativeDestruct();
@@ -319,6 +423,140 @@ void UArchSkyWidgetBase::RebuildLocationOptions()
 }
 
 // ---------------------------------------------------------------------------------------
+// Playback transport
+// ---------------------------------------------------------------------------------------
+
+void UArchSkyWidgetBase::RebuildSpeedPresetOptions()
+{
+	if (!SpeedPresetCombo || !ViewModel)
+	{
+		return;
+	}
+
+	TArray<FText> Labels;
+	ViewModel->GetSpeedPresetOptions(SpeedComboPresets, Labels);
+
+	SpeedPresetCombo->ClearOptions();
+	for (const FText& Label : Labels)
+	{
+		SpeedPresetCombo->AddOption(Label.ToString());
+	}
+
+	// Select whichever preset is actually in force. Custom is not in the list, so an
+	// arbitrary multiplier simply leaves the dropdown showing nothing selected - which is
+	// honest, and the label beside the slider still reports the real number.
+	const int32 CurrentIndex = SpeedComboPresets.IndexOfByKey(ViewModel->SpeedPreset);
+	if (Labels.IsValidIndex(CurrentIndex))
+	{
+		SpeedPresetCombo->SetSelectedOption(Labels[CurrentIndex].ToString());
+	}
+}
+
+void UArchSkyWidgetBase::HandleTimelineSliderChanged(float Value)
+{
+	if (bSuppressSliderCallbacks || !ViewModel)
+	{
+		return;
+	}
+
+	// The timeline reads in minutes; the throttle works in hours. Converting here means the
+	// timeline and the time-of-day slider share one pending value and one flush, so a panel
+	// carrying both cannot push two conflicting seeks in the same frame.
+	const float Hours = UArchSkyPlaybackSubsystem::WrapMinutes(Value) / 60.f;
+
+	if (bTimePushPending && FMath::Abs(Hours - PendingTimeOfDayHours) < TimeSliderMinDelta)
+	{
+		return;
+	}
+
+	PendingTimeOfDayHours = Hours;
+	bTimePushPending = true;
+}
+
+void UArchSkyWidgetBase::HandleTimelineCaptureBegin()
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandBeginScrub();
+	}
+}
+
+void UArchSkyWidgetBase::HandleTimelineCaptureEnd()
+{
+	// Push the final handle position before resuming, so playback restarts from exactly
+	// where the user let go rather than from the last throttled sample.
+	FlushPendingSliderPush();
+
+	if (ViewModel)
+	{
+		ViewModel->CommandEndScrub();
+	}
+}
+
+void UArchSkyWidgetBase::HandlePlayClicked()
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandPlay();
+	}
+}
+
+void UArchSkyWidgetBase::HandlePauseClicked()
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandPause();
+	}
+}
+
+void UArchSkyWidgetBase::HandleStopClicked()
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandStop();
+	}
+}
+
+void UArchSkyWidgetBase::HandleStepForwardClicked()
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandStepForward();
+	}
+}
+
+void UArchSkyWidgetBase::HandleStepBackwardClicked()
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandStepBackward();
+	}
+}
+
+void UArchSkyWidgetBase::HandleSpeedPresetSelected(FString SelectedItem, ESelectInfo::Type SelectionType)
+{
+	// Ignore the selection raised while we are repopulating the list.
+	if (SelectionType == ESelectInfo::Direct || !ViewModel || !SpeedPresetCombo)
+	{
+		return;
+	}
+
+	const int32 Index = SpeedPresetCombo->FindOptionIndex(SelectedItem);
+	if (SpeedComboPresets.IsValidIndex(Index))
+	{
+		ViewModel->CommandSetSpeedPreset(SpeedComboPresets[Index]);
+	}
+}
+
+void UArchSkyWidgetBase::HandleLoopToggled(bool bIsChecked)
+{
+	if (ViewModel)
+	{
+		ViewModel->CommandSetLoopEnabled(bIsChecked);
+	}
+}
+
+// ---------------------------------------------------------------------------------------
 // Presentation
 // ---------------------------------------------------------------------------------------
 
@@ -348,9 +586,35 @@ void UArchSkyWidgetBase::HandleViewModelUpdated()
 		NorthOffsetDial->SetValue(ViewModel->NorthOffsetDegrees / 360.f);
 	}
 
+	if (TimelineSlider)
+	{
+		TimelineSlider->SetValue(ViewModel->CurrentSimTime);
+	}
+
 	if (TimeLabel)
 	{
 		TimeLabel->SetText(ViewModel->TimeText);
+	}
+
+	if (PlaybackTimeLabel)
+	{
+		PlaybackTimeLabel->SetText(ViewModel->PlaybackTimeText);
+	}
+
+	if (PlaybackDateLabel)
+	{
+		PlaybackDateLabel->SetText(ViewModel->PlaybackDateText);
+	}
+
+	if (SpeedPresetLabel)
+	{
+		SpeedPresetLabel->SetText(ViewModel->SpeedPresetText);
+	}
+
+	if (LoopToggle)
+	{
+		// SetIsChecked does not raise OnCheckStateChanged, so this cannot echo back.
+		LoopToggle->SetIsChecked(ViewModel->bLoopEnabled);
 	}
 
 	if (DateLabel)
@@ -416,7 +680,21 @@ FReply UArchSkyWidgetBase::NativeOnKeyDown(const FGeometry& InGeometry, const FK
 
 	if (Key == EKeys::SpaceBar || Key == EKeys::Gamepad_FaceButton_Bottom)
 	{
-		ViewModel->CommandToggleTimePause();
+		// Routed through the transport rather than the raw clock, so the loop window and
+		// the speed setting are honoured exactly as they are for the Play button.
+		ViewModel->CommandTogglePlayback();
+		return FReply::Handled();
+	}
+
+	// Comma and full stop step by one StepSize, the convention every video scrubber uses.
+	if (Key == EKeys::Comma || Key == EKeys::Gamepad_LeftShoulder)
+	{
+		ViewModel->CommandStepBackward();
+		return FReply::Handled();
+	}
+	if (Key == EKeys::Period || Key == EKeys::Gamepad_RightShoulder)
+	{
+		ViewModel->CommandStepForward();
 		return FReply::Handled();
 	}
 

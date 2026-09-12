@@ -27,6 +27,7 @@ gives seven counters:
 | `ArchSky MPC Write` | The batched material-parameter write |
 | `ArchSky Weather Apply` | Atmosphere, fog and cloud component writes |
 | `ArchSky Subsystem Tick` | Time advancement and weather transition |
+| `ArchSky Playback Tick` | Loop-boundary supervision while playing |
 
 Typical desktop figures with time flowing, measured against the default settings:
 
@@ -37,6 +38,7 @@ Typical desktop figures with time flowing, measured against the default settings
 | MPC write | ~15 µs |
 | Weather apply | ~20 µs, only on a weather change |
 | Sky recapture | **1–4 ms**, GPU-bound |
+| Playback tick | ~1 µs, and only while playing |
 | Director tick, paused | < 1 µs (it early-outs) |
 
 The headline is the ratio: the astronomy is free, and a sky-light recapture costs a
@@ -175,6 +177,11 @@ Consider also turning off `bRealTimeCapture` on the sky light and letting the th
 
 You do not need to configure these; they are structural.
 
+- **The transport costs nothing when paused.** `UArchSkyPlaybackSubsystem::IsTickable()`
+  returns false unless the clock is actually moving, and even while playing it does no
+  arithmetic of its own — it only checks whether the loop boundary was crossed. Playback
+  reuses the clock's existing advancement rather than running a second one.
+
 - **A paused sky costs nothing.** With time paused, no weather transition running and
   nothing marked dirty, `AArchSkyDirector::Tick` early-outs after one branch and
   `UArchSkySubsystem::IsTickable()` returns false, so the subsystem is not ticked at all.
@@ -203,6 +210,12 @@ You do not need to configure these; they are structural.
 ---
 
 ## When a shadow study is the deliverable
+
+A fast playback speed does **not** cost more CPU — the clock advances by a larger step per
+frame, not more often. What it does cost is sky-light recaptures: at ×8640 the sun moves
+about 0.4° per frame at 60 fps, so the 1° altitude threshold fires roughly every third
+frame and the `MinFramesBetweenSkyRecaptures` floor becomes the thing actually protecting
+you. Raise the floor, not the speed, if a time-lapse hitches.
 
 For an *offline* study — rendering frames to disk rather than presenting live — invert
 every recommendation above:

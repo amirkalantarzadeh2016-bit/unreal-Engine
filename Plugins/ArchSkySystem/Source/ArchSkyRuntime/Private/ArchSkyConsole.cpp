@@ -1,6 +1,7 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "Core/ArchSkyDirector.h"
+#include "Core/ArchSkyPlaybackSubsystem.h"
 #include "Core/ArchSkySubsystem.h"
 #include "Data/ArchLocationPreset.h"
 #include "Data/ArchSkySettings.h"
@@ -249,6 +250,183 @@ namespace ArchSkyConsole
 			Subsystem->HasSceneDirector() ? TEXT("registered") : TEXT("NONE - nothing will be visible"));
 	}
 
+	/** Resolves the playback transport, which does not exist in an editor world. */
+	UArchSkyPlaybackSubsystem* GetPlayback(UWorld* InWorld)
+	{
+		if (!InWorld)
+		{
+			UE_LOG(LogArchSky, Warning, TEXT("ArchSky console command ran with no world context."));
+			return nullptr;
+		}
+
+		UArchSkyPlaybackSubsystem* Playback = InWorld->GetSubsystem<UArchSkyPlaybackSubsystem>();
+		if (!Playback)
+		{
+			UE_LOG(LogArchSky, Warning,
+				TEXT("No ArchSky playback transport in world '%s'. Playback exists only in a running game or PIE."),
+				*InWorld->GetName());
+		}
+
+		return Playback;
+	}
+
+	void PlaybackPlay(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		if (UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld))
+		{
+			Playback->Play();
+			UE_LOG(LogArchSky, Display, TEXT("Playing at x%.0f from %s."),
+				Playback->GetSpeedMultiplier(), *Playback->GetFormattedSimTime(true).ToString());
+		}
+	}
+
+	void PlaybackPause(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		if (UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld))
+		{
+			Playback->Pause();
+			UE_LOG(LogArchSky, Display, TEXT("Paused at %s."), *Playback->GetFormattedSimTime(true).ToString());
+		}
+	}
+
+	void PlaybackStop(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		if (UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld))
+		{
+			Playback->Stop();
+			UE_LOG(LogArchSky, Display, TEXT("Stopped and rewound to %s."),
+				*Playback->GetFormattedSimTime(true).ToString());
+		}
+	}
+
+	void PlaybackStep(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld);
+		if (!Playback)
+		{
+			return;
+		}
+
+		// No argument steps forward by one StepSize; an argument steps by that many minutes.
+		float Minutes = Playback->GetStepSize();
+		if (Args.IsValidIndex(0) && !ParseFloatArg(Args, 0, TEXT("Minutes"), Minutes))
+		{
+			return;
+		}
+
+		Playback->StepByMinutes(Minutes);
+		UE_LOG(LogArchSky, Display, TEXT("Stepped %+.1f min to %s."),
+			Minutes, *Playback->GetFormattedSimTime(true).ToString());
+	}
+
+	void PlaybackSetSimTime(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		float Minutes = 0.f;
+		if (!ParseFloatArg(Args, 0, TEXT("0-1440"), Minutes))
+		{
+			return;
+		}
+
+		if (UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld))
+		{
+			Playback->SetCurrentSimTime(Minutes);
+			UE_LOG(LogArchSky, Display, TEXT("Sought to %s (%.1f min)."),
+				*Playback->GetFormattedSimTime(true).ToString(), Playback->GetCurrentSimTime());
+		}
+	}
+
+	void PlaybackSetSpeed(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld);
+		if (!Playback)
+		{
+			return;
+		}
+
+		if (!Args.IsValidIndex(0))
+		{
+			UE_LOG(LogArchSky, Warning,
+				TEXT("Usage: ArchSky.Playback.Speed <multiplier | realtime | fast | hour | day>"));
+			return;
+		}
+
+		const FString Argument = Args[0].ToLower();
+
+		// Accept the preset names as well as a raw number, because "ArchSky.Playback.Speed
+		// day" is a great deal easier to remember mid-presentation than "8640".
+		if (Argument == TEXT("realtime") || Argument == TEXT("real"))
+		{
+			Playback->SetSpeedPreset(EArchPlaybackSpeedPreset::RealTime);
+		}
+		else if (Argument == TEXT("fast"))
+		{
+			Playback->SetSpeedPreset(EArchPlaybackSpeedPreset::Fast);
+		}
+		else if (Argument == TEXT("hour"))
+		{
+			Playback->SetSpeedPreset(EArchPlaybackSpeedPreset::HourPerSecond);
+		}
+		else if (Argument == TEXT("day"))
+		{
+			Playback->SetSpeedPreset(EArchPlaybackSpeedPreset::FullDayTenSeconds);
+		}
+		else
+		{
+			float Multiplier = 60.f;
+			if (!ParseFloatArg(Args, 0, TEXT("multiplier"), Multiplier))
+			{
+				return;
+			}
+			Playback->SetSpeedMultiplier(Multiplier);
+		}
+
+		UE_LOG(LogArchSky, Display, TEXT("Playback speed is now %s."),
+			*Playback->GetCurrentSpeedDisplayName().ToString());
+	}
+
+	void PlaybackLoop(const TArray<FString>& Args, UWorld* InWorld)
+	{
+		UArchSkyPlaybackSubsystem* Playback = GetPlayback(InWorld);
+		if (!Playback)
+		{
+			return;
+		}
+
+		if (!Args.IsValidIndex(0))
+		{
+			UE_LOG(LogArchSky, Display, TEXT("Loop is %s, window %.0f-%.0f min (%s - %s)."),
+				Playback->IsLoopEnabled() ? TEXT("ON") : TEXT("OFF"),
+				Playback->GetLoopStart(), Playback->GetLoopEnd(),
+				*UArchSkyPlaybackSubsystem::FormatMinutesAsClock(Playback->GetLoopStart(), true).ToString(),
+				*UArchSkyPlaybackSubsystem::FormatMinutesAsClock(Playback->GetLoopEnd(), true).ToString());
+			UE_LOG(LogArchSky, Display, TEXT("Usage: ArchSky.Playback.Loop <0|1> [StartMinutes] [EndMinutes]"));
+			return;
+		}
+
+		int32 Enabled = 0;
+		if (!ParseIntArg(Args, 0, TEXT("0|1"), Enabled))
+		{
+			return;
+		}
+
+		if (Args.IsValidIndex(2))
+		{
+			float Start = 0.f;
+			float End = UArchSkyPlaybackSubsystem::MinutesPerDay;
+			if (ParseFloatArg(Args, 1, TEXT("StartMinutes"), Start)
+				&& ParseFloatArg(Args, 2, TEXT("EndMinutes"), End))
+			{
+				Playback->SetLoopRange(Start, End);
+			}
+		}
+
+		Playback->SetLoopEnabled(Enabled != 0);
+
+		UE_LOG(LogArchSky, Display, TEXT("Loop %s, window %.0f-%.0f min."),
+			Playback->IsLoopEnabled() ? TEXT("ON") : TEXT("OFF"),
+			Playback->GetLoopStart(), Playback->GetLoopEnd());
+	}
+
 	// -----------------------------------------------------------------------------------
 	// CVars
 	// -----------------------------------------------------------------------------------
@@ -322,6 +500,41 @@ namespace ArchSkyConsole
 		TEXT("ArchSky.TimeScale"),
 		TEXT("ArchSky.TimeScale <float>  -  Simulated hours per real second. 0 pauses."),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetTimeScale));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackPlay(
+		TEXT("ArchSky.Playback.Play"),
+		TEXT("ArchSky.Playback.Play  -  Starts the simulation running at the current speed."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackPlay));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackPause(
+		TEXT("ArchSky.Playback.Pause"),
+		TEXT("ArchSky.Playback.Pause  -  Stops the clock where it is."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackPause));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackStop(
+		TEXT("ArchSky.Playback.Stop"),
+		TEXT("ArchSky.Playback.Stop  -  Stops the clock and rewinds to the loop start, or midnight."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackStop));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackStep(
+		TEXT("ArchSky.Playback.Step"),
+		TEXT("ArchSky.Playback.Step [Minutes]  -  Steps by StepSize, or by the given minutes. Negative goes back."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackStep));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackSeek(
+		TEXT("ArchSky.Playback.Seek"),
+		TEXT("ArchSky.Playback.Seek <0-1440>  -  Seeks to a position in minutes from midnight."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackSetSimTime));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackSpeed(
+		TEXT("ArchSky.Playback.Speed"),
+		TEXT("ArchSky.Playback.Speed <multiplier | realtime | fast | hour | day>  -  Sets the playback speed."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackSetSpeed));
+
+	static FAutoConsoleCommandWithWorldAndArgs CmdPlaybackLoop(
+		TEXT("ArchSky.Playback.Loop"),
+		TEXT("ArchSky.Playback.Loop <0|1> [StartMinutes] [EndMinutes]  -  Sets loop mode and its window."),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&PlaybackLoop));
 
 	static FAutoConsoleCommandWithWorldAndArgs CmdLogState(
 		TEXT("ArchSky.LogState"),
@@ -399,9 +612,23 @@ namespace ArchSkyDebugDraw
 				State.NorthOffsetDegrees, State.TimeFlowRate,
 				Subsystem->IsTimePaused() ? TEXT(" [PAUSED]") : TEXT("")));
 
+			if (const UArchSkyPlaybackSubsystem* Playback = World->GetSubsystem<UArchSkyPlaybackSubsystem>())
+			{
+				Line(9009, FColor::White, FString::Printf(TEXT("  Transport: %s   %.1f min   %s"),
+					Playback->IsPlaying() ? TEXT("PLAYING") : TEXT("PAUSED"),
+					Playback->GetCurrentSimTime(),
+					*Playback->GetCurrentSpeedDisplayName().ToString()));
+
+				if (Playback->IsLoopEnabled())
+				{
+					Line(9010, FColor::White, FString::Printf(TEXT("  Loop: %.0f-%.0f min   lap %d"),
+						Playback->GetLoopStart(), Playback->GetLoopEnd(), Playback->GetLoopCount()));
+				}
+			}
+
 			if (!Subsystem->HasSceneDirector())
 			{
-				Line(9009, FColor::Red, TEXT("  NO ARCHSKY DIRECTOR IN THIS LEVEL - the sky will not update."));
+				Line(9011, FColor::Red, TEXT("  NO ARCHSKY DIRECTOR IN THIS LEVEL - the sky will not update."));
 			}
 		}
 

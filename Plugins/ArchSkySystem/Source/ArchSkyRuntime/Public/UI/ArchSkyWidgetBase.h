@@ -120,6 +120,56 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
 	TObjectPtr<UEditableTextBox> LocationSearchBox;
 
+	// --- Playback transport. All optional, like everything above. -----------------------
+
+	/**
+	 * The scrubber. Its range is set to 0 .. 1440 (minutes from midnight) in C++, so a
+	 * designer does not have to remember the numbers, and it is bound bidirectionally:
+	 * dragging seeks the simulation, and the simulation writes the handle back.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<USlider> TimelineSlider;
+
+	/** Starts playback. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> PlayButton;
+
+	/** Stops the clock where it is. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> PauseButton;
+
+	/** Stops the clock and rewinds. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> StopButton;
+
+	/** Adds one StepSize. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> StepForwardButton;
+
+	/** Subtracts one StepSize. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> StepBackwardButton;
+
+	/** Speed preset dropdown, populated from the transport in C++. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UComboBoxString> SpeedPresetCombo;
+
+	/** Loop on/off. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UCheckBox> LoopToggle;
+
+	/** The transport clock, "HH:MM". */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PlaybackTimeLabel;
+
+	/** The simulated date. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PlaybackDateLabel;
+
+	/** The speed label beside the slider. */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI|Bound", meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> SpeedPresetLabel;
+
 	// -----------------------------------------------------------------------------------
 	// Throttling
 	// -----------------------------------------------------------------------------------
@@ -177,12 +227,50 @@ protected:
 	/** Rebuilds the city dropdown from the current search text. */
 	void RebuildLocationOptions();
 
+	/** Fills the speed dropdown from the transport's selectable presets. */
+	void RebuildSpeedPresetOptions();
+
+	// --- Playback handlers ---
+
+	UFUNCTION()
+	void HandleTimelineSliderChanged(float Value);
+
+	UFUNCTION()
+	void HandleTimelineCaptureBegin();
+
+	UFUNCTION()
+	void HandleTimelineCaptureEnd();
+
+	UFUNCTION()
+	void HandlePlayClicked();
+
+	UFUNCTION()
+	void HandlePauseClicked();
+
+	UFUNCTION()
+	void HandleStopClicked();
+
+	UFUNCTION()
+	void HandleStepForwardClicked();
+
+	UFUNCTION()
+	void HandleStepBackwardClicked();
+
+	UFUNCTION()
+	void HandleSpeedPresetSelected(FString SelectedItem, ESelectInfo::Type SelectionType);
+
+	UFUNCTION()
+	void HandleLoopToggled(bool bIsChecked);
+
 	/** Pushes any pending, throttled slider value to the ViewModel. */
 	void FlushPendingSliderPush();
 
 private:
 	/** City ids parallel to the combo box's display strings, so selection needs no search. */
 	TArray<FName> LocationComboIds;
+
+	/** Speed presets parallel to the speed combo's display strings. */
+	TArray<EArchPlaybackSpeedPreset> SpeedComboPresets;
 
 	/** Value waiting to be pushed, and which control produced it. */
 	float PendingTimeOfDayHours = 0.f;

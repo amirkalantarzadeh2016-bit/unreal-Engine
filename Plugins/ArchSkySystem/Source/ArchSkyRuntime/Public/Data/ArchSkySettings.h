@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Core/ArchSkyPlaybackTypes.h"
 #include "Curves/CurveFloat.h"
 #include "Engine/DeveloperSettings.h"
 #include "Math/ArchSolarTypes.h"
@@ -174,6 +175,45 @@ public:
 	/** When false the moon light component is never created, saving one shadowed light. */
 	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Performance")
 	bool bEnableMoonLight = true;
+
+	// --- Playback ---------------------------------------------------------------------------
+	// The brief asks for the speed to be "configurable before runtime". This is where that
+	// lives: a UWorldSubsystem has no details panel, so Project Settings is the only place
+	// a value can be authored ahead of play and travel with the project.
+
+	/** Speed preset selected when a level starts. */
+	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Playback")
+	EArchPlaybackSpeedPreset DefaultPlaybackSpeedPreset = EArchPlaybackSpeedPreset::Fast;
+
+	/**
+	 * Speed multiplier used when DefaultPlaybackSpeedPreset is Custom.
+	 *
+	 * A ratio of simulated to real time: 1 = real time, 60 = one simulated minute per real
+	 * second, 3600 = one simulated hour per real second, 8640 = a whole day in ten seconds.
+	 */
+	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Playback",
+		meta = (ClampMin = "0.001", ClampMax = "2160000.0", UIMin = "1.0", UIMax = "8640.0",
+			EditCondition = "DefaultPlaybackSpeedPreset == EArchPlaybackSpeedPreset::Custom"))
+	float DefaultPlaybackSpeedMultiplier = 60.f;
+
+	/** Whether looping is on when a level starts. */
+	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Playback")
+	bool bDefaultPlaybackLoopEnabled = false;
+
+	/** Start of the default loop window, in minutes from midnight. 0 = 00:00. */
+	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Playback",
+		meta = (ClampMin = "0.0", ClampMax = "1440.0", UIMin = "0.0", UIMax = "1440.0", Units = "Minutes"))
+	float DefaultPlaybackLoopStartMinutes = 0.f;
+
+	/** End of the default loop window, in minutes from midnight. 1440 = 24:00. */
+	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Playback",
+		meta = (ClampMin = "0.0", ClampMax = "1440.0", UIMin = "0.0", UIMax = "1440.0", Units = "Minutes"))
+	float DefaultPlaybackLoopEndMinutes = 1440.f;
+
+	/** Minutes added or removed by one press of Step Forward / Step Backward. */
+	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Playback",
+		meta = (ClampMin = "0.01", ClampMax = "1440.0", UIMin = "1.0", UIMax = "120.0", Units = "Minutes"))
+	float DefaultPlaybackStepSizeMinutes = 15.f;
 
 	// --- Networking -----------------------------------------------------------------------
 

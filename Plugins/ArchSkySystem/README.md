@@ -59,6 +59,17 @@ You now have a correct sky. Everything below is about driving it at runtime.
  │                                                                          │
  │   Holds NO pointer to any scene component.                               │
  └──────────────────────────────────────────────────────────────────────────┘
+                                     ▲
+                                     │  drives the clock; never stores one
+                                     │
+ ┌──────────────────────────────────────────────────────────────────────────┐
+ │  TRANSPORT — UArchSkyPlaybackSubsystem   (game / PIE worlds only)        │
+ │                                                                          │
+ │   Play · Pause · Stop · Scrub · Loop · Step · Speed presets              │
+ │   CurrentSimTime (0–1440 min) is a DERIVED VIEW of the clock above,      │
+ │   not a second copy — so the transport, the console, the editor          │
+ │   sliders and replication can never disagree.                            │
+ └──────────────────────────────────────────────────────────────────────────┘
                     │                                    ▲
    OnSkyStateChanged│ (broadcast)          Command*()    │ (calls)
                     ▼                                    │
@@ -89,6 +100,7 @@ You now have a correct sky. Everything below is about driving it at runtime.
 |---|---|---|
 | **A — Math** | Astronomy and calendars. Pure functions in `double`. | Touch a `UObject`, a `UWorld`, or the game thread's state. |
 | **C — Subsystem** | `FArchSkyState`, validation, derived values, delegates. | Hold a pointer into a scene component, or apply anything to the scene. |
+| **Transport** | Play/pause/stop, loop window, step size, speed presets. | Accumulate its own clock, or exist in an editor world. |
 | **B — Director** | Every scene component and every write to them. Throttling. | Decide *what* the state should be, or advance time. |
 | **UI — ViewModel** | Formatting and command routing. | Touch a light, or be bound to per-frame. |
 | **UI — Widget** | Visuals, input, focus. | Talk to the subsystem directly, or leave a delegate bound. |
@@ -97,6 +109,74 @@ You now have a correct sky. Everything below is about driving it at runtime.
 The decoupling is not decoration. Because the subsystem holds no scene references, it is
 fully functional in a level with **no Director at all** — which is what makes the
 automation tests and headless shadow-study export possible.
+
+---
+
+## Playback
+
+A transport sits on top of the clock: play, pause, stop, a 0–1440 scrubber, loop mode and
+step mode. It lives in `UArchSkyPlaybackSubsystem`, so playback keeps running when the
+panel is hidden and cannot desynchronise from anything else that moves time.
+
+```
+Get ArchSky Playback → Set Speed Preset (Hour per second) → Play
+```
+
+| Control | Behaviour |
+|---|---|
+| **Play** | Runs at the current speed. With looping on, jumps into the window first. |
+| **Pause** | Stops the clock, keeps the position. |
+| **Stop** | Stops **and rewinds** — to the loop start, or to midnight. |
+| **Scrubber** | 0–1440 minutes, bound bidirectionally. Dragging suspends playback; releasing resumes it **from the new position**. |
+| **Step ± ** | Adds or removes `StepSize` (default 15 min), **clamped** to [0, 1440]. Stepping pauses continuous playback. |
+| **Loop** | On reaching `LoopEnd`, jumps to `LoopStart`; with looping off, lands exactly on the boundary and stops. |
+
+With looping on, **playback is confined to the window** — pressing Play or releasing a
+drag outside it snaps into the window. Scrubbing while **paused** is unconstrained, so
+inspecting 20:00 with a 06:00–18:00 loop set is still one drag away; it just does not
+survive pressing Play.
+
+### Speed presets
+
+`SpeedMultiplier` is a **ratio of simulated to real time**:
+
+| Preset | Multiplier | Advances |
+|---|---|---|
+| Real-time | ×1 | 1 simulated second per real second |
+| **Fast** (default) | ×60 | 1 simulated minute per real second |
+| Hour per second | ×3600 | 1 simulated hour per real second |
+| Full day in 10 s | ×8640 | a whole day in ten real seconds |
+
+> **A note on the units.** The original brief gave both a formula
+> (`CurrentSimTime += DeltaSeconds * SpeedMultiplier`, with `CurrentSimTime` in minutes)
+> and these four labels. **They disagree by a factor of 60** — taken literally the formula
+> makes ×1 run sixty times faster than real time, and ×8640 cover six simulated days per
+> second. The labels were implemented, because all four are individually annotated, they
+> agree with one another, and they agree with the stated default of 60 being "Fast".
+> In minutes the accumulation is therefore `+= DeltaSeconds * SpeedMultiplier / 60`.
+> There is an automation test (`ArchSky.Playback.SpeedPresetTable`) that pins each label to
+> its meaning, so the discrepancy cannot quietly return.
+
+Defaults for speed, loop window and step size are authored **before runtime** in
+*Project Settings → Plugins → ArchSky → Playback*.
+
+### Manually testing playback
+
+The pure logic is covered by `Automation RunTests ArchSky.Playback`. The parts that need a
+live world are quickest to check from the console in PIE:
+
+```
+ArchSky.Debug.ShowState 1                  transport state appears on the HUD
+ArchSky.Playback.Speed day                 a full day in ten seconds
+ArchSky.Playback.Play                      the sun should sweep the sky in ~10 s
+ArchSky.Playback.Loop 1 360 1080           loop 06:00-18:00
+ArchSky.Playback.Seek 720                  jump to noon; playback continues from there
+ArchSky.Playback.Step -15                  steps back 15 min AND pauses
+ArchSky.Playback.Stop                      stops and rewinds to 06:00 (the loop start)
+```
+
+Then, with the panel open: drag the scrubber while playing — the handle must follow the
+pointer without fighting it, and playback must resume on release.
 
 ---
 
@@ -121,6 +201,12 @@ ArchSky.Debug.LogSolarMath 1     full solution, once a second
 
 ArchSky.Perf.SkyRecaptureThreshold 2.5   (also available in Shipping)
 stat ArchSky
+
+ArchSky.Playback.Play / .Pause / .Stop
+ArchSky.Playback.Seek <0-1440>
+ArchSky.Playback.Step [minutes]
+ArchSky.Playback.Speed <multiplier | realtime | fast | hour | day>
+ArchSky.Playback.Loop <0|1> [start] [end]
 ```
 
 Editor-only viewport CVars: `ArchSky.Editor.SunPathRadius`,
@@ -169,6 +255,9 @@ or *Tools → Test Automation → Automation → ArchSky*. The suite covers:
   year of invariants
 - Every axis of the coordinate conversion, including that the light's forward vector is
   the exact negation of the direction-to-body at 200+ angle combinations
+- The playback speed table (each preset pinned to what its label claims), minute/clock
+  conversion and rounding, loop-boundary detection including the midnight wrap, and step
+  clamping
 - Jalali ↔ Gregorian round trips for **every day from 1900 to 2100**, plus Nowruz anchors
 
 Angular tolerance is ±0.5°.
@@ -280,6 +369,9 @@ Turn it on in *Project Settings → Plugins → ArchSky*:
 | Nothing happens at all | No Director in the level. `ArchSky.Debug.ShowState 1` says so in red. |
 | Indoor light does not follow the sun | Lumen is off. ArchSky assumes a dynamic GI path. |
 | Jalali date is off by one day | You are comparing against a Birashk-cycle converter. This plugin uses the leap-year breaks table, which matches the observed Iranian calendar. |
+| `Get ArchSky Playback` returns null | You are in an editor world. The transport exists only in game and PIE; use the Sun Study sliders in the Details panel instead. |
+| Playback runs 60× too fast or too slow | You are supplying a multiplier meant for the brief's literal formula. `SpeedMultiplier` is a ratio of simulated to real time — see **Playback**. |
+| The scrubber handle fights the pointer | The Blueprint added its own `OnValueChanged` handler to `TimelineSlider`, or the mouse-capture events are unbound. Both are wired in C++ already. |
 
 ---
 

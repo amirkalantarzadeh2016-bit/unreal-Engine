@@ -3,6 +3,7 @@
 #include "UI/ArchSkyViewModel.h"
 
 #include "Core/ArchSkyDirector.h"
+#include "Core/ArchSkyPlaybackSubsystem.h"
 #include "Core/ArchSkySubsystem.h"
 #include "Data/ArchSkySettings.h"
 #include "Data/ArchTimeCalendar.h"
@@ -91,6 +92,17 @@ void UArchSkyViewModel::Initialise(const UObject* WorldContextObject)
 
 	SkySubsystem = Subsystem;
 
+	// The transport is optional: it does not exist in an editor world, where the Sun Study
+	// details panel scrubs the same clock directly. Everything playback-related degrades to
+	// an inert, correctly-defaulted readout when it is absent.
+	if (UArchSkyPlaybackSubsystem* Playback = UArchSkyPlaybackSubsystem::Get(WorldContextObject))
+	{
+		PlaybackSubsystem = Playback;
+		Playback->OnPlaybackStateChanged.AddDynamic(this, &UArchSkyViewModel::HandlePlaybackStateChanged);
+		Playback->OnPlaybackSpeedChanged.AddDynamic(this, &UArchSkyViewModel::HandlePlaybackSpeedChanged);
+		Playback->OnPlaybackReachedEnd.AddDynamic(this, &UArchSkyViewModel::HandlePlaybackReachedEnd);
+	}
+
 	Subsystem->OnSkyStateChanged.AddDynamic(this, &UArchSkyViewModel::HandleSkyStateChanged);
 	Subsystem->OnTimePhaseChanged.AddDynamic(this, &UArchSkyViewModel::HandleTimePhaseChanged);
 	Subsystem->OnWeatherTransitionStarted.AddDynamic(this, &UArchSkyViewModel::HandleWeatherTransition);
@@ -115,7 +127,15 @@ void UArchSkyViewModel::Shutdown()
 		Subsystem->OnWeatherTransitionCompleted.RemoveDynamic(this, &UArchSkyViewModel::HandleWeatherTransition);
 	}
 
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->OnPlaybackStateChanged.RemoveDynamic(this, &UArchSkyViewModel::HandlePlaybackStateChanged);
+		Playback->OnPlaybackSpeedChanged.RemoveDynamic(this, &UArchSkyViewModel::HandlePlaybackSpeedChanged);
+		Playback->OnPlaybackReachedEnd.RemoveDynamic(this, &UArchSkyViewModel::HandlePlaybackReachedEnd);
+	}
+
 	SkySubsystem.Reset();
+	PlaybackSubsystem.Reset();
 	CachedDirector.Reset();
 }
 
@@ -133,6 +153,24 @@ void UArchSkyViewModel::HandleTimePhaseChanged(EArchTimePhase OldPhase, EArchTim
 
 void UArchSkyViewModel::HandleWeatherTransition(FName FromPresetId, FName ToPresetId)
 {
+	RefreshAllFields();
+}
+
+void UArchSkyViewModel::HandlePlaybackStateChanged(bool bNowPlaying)
+{
+	RefreshAllFields();
+}
+
+void UArchSkyViewModel::HandlePlaybackSpeedChanged(float NewSpeedMultiplier, EArchPlaybackSpeedPreset NewPreset)
+{
+	RefreshAllFields();
+}
+
+void UArchSkyViewModel::HandlePlaybackReachedEnd()
+{
+	// Nothing extra to format - the state change that accompanies the stop already
+	// refreshed the panel. The binding exists so a Blueprint can react to the end of a
+	// loop window on its own (a chime, an auto-advance to the next study date).
 	RefreshAllFields();
 }
 
@@ -256,6 +294,54 @@ void UArchSkyViewModel::RefreshAllFields()
 	WeatherText = Subsystem->GetWeatherPresetDisplayName(ActiveWeatherId);
 
 	WeatherTransitionProgress = Subsystem->IsWeatherTransitionActive() ? State.WeatherBlendAlpha : 1.f;
+
+	// --- Playback transport ---
+	CurrentSimTime = State.TimeOfDayHours * 60.f;
+	CurrentSimTime01 = FMath::Clamp(CurrentSimTime / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
+	bIsPlaying = !Subsystem->IsTimePaused();
+	PlaybackTimeText = UArchSkyPlaybackSubsystem::FormatMinutesAsClock(CurrentSimTime, bUse24HourClock);
+	PlaybackDateText = DateText;
+
+	if (const UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		SpeedMultiplier = Playback->GetSpeedMultiplier();
+		SpeedPreset = Playback->GetSpeedPreset();
+		SpeedPresetText = Playback->GetCurrentSpeedDisplayName();
+
+		bLoopEnabled = Playback->IsLoopEnabled();
+		LoopStart = Playback->GetLoopStart();
+		LoopEnd = Playback->GetLoopEnd();
+		StepSize = Playback->GetStepSize();
+	}
+	else
+	{
+		// No transport in this world: report the clock's own rate so the speed label is
+		// still truthful rather than stale.
+		SpeedMultiplier = State.TimeFlowRate * 3600.f;
+		SpeedPreset = EArchPlaybackSpeedPreset::Custom;
+
+		FNumberFormattingOptions SpeedOptions;
+		SpeedOptions.MaximumFractionalDigits = 2;
+		SpeedPresetText = FText::Format(
+			LOCTEXT("SpeedFallbackFormat", "x{0}"), FText::AsNumber(SpeedMultiplier, &SpeedOptions));
+	}
+
+	LoopStart01 = FMath::Clamp(LoopStart / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
+	LoopEnd01 = FMath::Clamp(LoopEnd / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
+
+	{
+		FFormatNamedArguments LoopArgs;
+		LoopArgs.Add(TEXT("Start"), UArchSkyPlaybackSubsystem::FormatMinutesAsClock(LoopStart, bUse24HourClock));
+		LoopArgs.Add(TEXT("End"), UArchSkyPlaybackSubsystem::FormatMinutesAsClock(LoopEnd, bUse24HourClock));
+		LoopRangeText = FText::Format(LOCTEXT("LoopRangeFormat", "{Start} - {End}"), LoopArgs);
+	}
+
+	{
+		FNumberFormattingOptions StepOptions;
+		StepOptions.MaximumFractionalDigits = (FMath::Frac(StepSize) > UE_KINDA_SMALL_NUMBER) ? 1 : 0;
+		StepSizeText = FText::Format(
+			LOCTEXT("StepSizeFormat", "{0} min"), FText::AsNumber(StepSize, &StepOptions));
+	}
 
 	OnViewModelUpdated.Broadcast();
 }
@@ -547,6 +633,216 @@ void UArchSkyViewModel::CommandSetUse24HourClock(bool bIn24Hour)
 
 	bUse24HourClock = bIn24Hour;
 	RefreshAllFields();
+}
+
+// ---------------------------------------------------------------------------------------
+// Playback transport commands
+// ---------------------------------------------------------------------------------------
+
+void UArchSkyViewModel::CommandPlay()
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		if (ShouldApplyLocally())
+		{
+			Playback->Play();
+		}
+		return;
+	}
+
+	// Fallback for a world with no transport: drive the clock directly.
+	CommandSetTimeFlowRate(SpeedMultiplier / 3600.f);
+}
+
+void UArchSkyViewModel::CommandPause()
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		if (ShouldApplyLocally())
+		{
+			Playback->Pause();
+		}
+		return;
+	}
+
+	CommandSetTimeFlowRate(0.f);
+}
+
+void UArchSkyViewModel::CommandStop()
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		if (ShouldApplyLocally())
+		{
+			Playback->Stop();
+		}
+		return;
+	}
+
+	CommandSetTimeFlowRate(0.f);
+	CommandSetTimeOfDay(0.f);
+}
+
+void UArchSkyViewModel::CommandTogglePlayback()
+{
+	bIsPlaying ? CommandPause() : CommandPlay();
+}
+
+void UArchSkyViewModel::CommandSetSimTime(float NewSimTimeMinutes)
+{
+	// Routed through CommandSetTimeOfDay rather than straight to the transport, so the
+	// server RPC path and the client-control gate apply to scrubbing exactly as they do to
+	// every other time change.
+	CommandSetTimeOfDay(NewSimTimeMinutes / 60.f);
+}
+
+void UArchSkyViewModel::CommandSetSimTimeNormalised(float Value01)
+{
+	CommandSetSimTime(FMath::Clamp(Value01, 0.f, 1.f) * UArchSkyPlaybackSubsystem::MinutesPerDay);
+}
+
+void UArchSkyViewModel::CommandBeginScrub()
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->BeginScrub();
+	}
+}
+
+void UArchSkyViewModel::CommandEndScrub()
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->EndScrub();
+	}
+}
+
+void UArchSkyViewModel::CommandStepForward()
+{
+	if (!ShouldApplyLocally())
+	{
+		return;
+	}
+
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->StepForward();
+		return;
+	}
+
+	CommandSetTimeFlowRate(0.f);
+	CommandSetSimTime(FMath::Clamp(CurrentSimTime + StepSize, 0.f, UArchSkyPlaybackSubsystem::MinutesPerDay));
+}
+
+void UArchSkyViewModel::CommandStepBackward()
+{
+	if (!ShouldApplyLocally())
+	{
+		return;
+	}
+
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->StepBackward();
+		return;
+	}
+
+	CommandSetTimeFlowRate(0.f);
+	CommandSetSimTime(FMath::Clamp(CurrentSimTime - StepSize, 0.f, UArchSkyPlaybackSubsystem::MinutesPerDay));
+}
+
+void UArchSkyViewModel::CommandSetStepSize(float NewStepSize)
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->SetStepSize(NewStepSize);
+		RefreshAllFields();
+	}
+}
+
+void UArchSkyViewModel::CommandSetSpeedPreset(EArchPlaybackSpeedPreset NewPreset)
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		if (ShouldApplyLocally())
+		{
+			Playback->SetSpeedPreset(NewPreset);
+		}
+		return;
+	}
+
+	// No transport: convert the preset to a flow rate ourselves so the dropdown still works.
+	const float Multiplier = (NewPreset == EArchPlaybackSpeedPreset::RealTime) ? 1.f
+		: (NewPreset == EArchPlaybackSpeedPreset::Fast) ? 60.f
+		: (NewPreset == EArchPlaybackSpeedPreset::HourPerSecond) ? 3600.f
+		: (NewPreset == EArchPlaybackSpeedPreset::FullDayTenSeconds) ? 8640.f
+		: SpeedMultiplier;
+
+	SpeedMultiplier = Multiplier;
+	if (bIsPlaying)
+	{
+		CommandSetTimeFlowRate(Multiplier / 3600.f);
+	}
+}
+
+void UArchSkyViewModel::CommandSetSpeedMultiplier(float NewSpeedMultiplier)
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		if (ShouldApplyLocally())
+		{
+			Playback->SetSpeedMultiplier(NewSpeedMultiplier);
+		}
+		return;
+	}
+
+	SpeedMultiplier = NewSpeedMultiplier;
+	if (bIsPlaying)
+	{
+		CommandSetTimeFlowRate(NewSpeedMultiplier / 3600.f);
+	}
+}
+
+void UArchSkyViewModel::CommandSetLoopEnabled(bool bEnabled)
+{
+	if (UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		Playback->SetLoopEnabled(bEnabled);
+		RefreshAllFields();
+	}
+}
+
+bool UArchSkyViewModel::CommandSetLoopRange(float NewLoopStart, float NewLoopEnd)
+{
+	UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get();
+	if (!Playback)
+	{
+		return false;
+	}
+
+	const bool bAccepted = Playback->SetLoopRange(NewLoopStart, NewLoopEnd);
+	RefreshAllFields();
+	return bAccepted;
+}
+
+void UArchSkyViewModel::GetSpeedPresetOptions(TArray<EArchPlaybackSpeedPreset>& OutPresets, TArray<FText>& OutLabels) const
+{
+	OutPresets.Reset();
+	OutLabels.Reset();
+
+	const UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get();
+	if (!Playback)
+	{
+		return;
+	}
+
+	OutPresets = Playback->GetSelectableSpeedPresets();
+	OutLabels.Reserve(OutPresets.Num());
+
+	for (const EArchPlaybackSpeedPreset Preset : OutPresets)
+	{
+		OutLabels.Add(Playback->GetSpeedPresetDisplayName(Preset));
+	}
 }
 
 bool UArchSkyViewModel::CommandSavePreset(const FString& PresetName, const FString& Notes)

@@ -25,6 +25,7 @@ DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky Sky Recapture"), STAT_ArchSky_SkyRecaptu
 DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky MPC Write"), STAT_ArchSky_MpcWrite, STATGROUP_ArchSky, ARCHSKYRUNTIME_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky Weather Apply"), STAT_ArchSky_WeatherApply, STATGROUP_ArchSky, ARCHSKYRUNTIME_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky Subsystem Tick"), STAT_ArchSky_SubsystemTick, STATGROUP_ArchSky, ARCHSKYRUNTIME_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("ArchSky Playback Tick"), STAT_ArchSky_PlaybackTick, STATGROUP_ArchSky, ARCHSKYRUNTIME_API);
 
 /**
  * Logs `Format` exactly once per call site for the lifetime of the process.
