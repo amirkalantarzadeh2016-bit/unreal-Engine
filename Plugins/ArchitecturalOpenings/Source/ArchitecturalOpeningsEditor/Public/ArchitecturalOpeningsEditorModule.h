@@ -21,6 +21,9 @@ public:
 	/** Tab id of the Architectural Openings setup panel. */
 	static const FName SetupPanelTabId;
 
+	/** Tab id of the leaf extraction panel. */
+	static const FName ExtractionPanelTabId;
+
 private:
 	void RegisterMenus();
 	void UnregisterMenus();

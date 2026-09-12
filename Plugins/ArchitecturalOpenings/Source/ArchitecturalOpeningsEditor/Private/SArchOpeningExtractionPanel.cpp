@@ -2,6 +2,8 @@
 
 #include "SArchOpeningExtractionPanel.h"
 
+#include "ArchOpeningActor.h"
+#include "ArchOpeningComponent.h"
 #include "ArchOpeningExtractionProfile.h"
 #include "ArchOpeningLog.h"
 #include "ArchOpeningPieceSetComponent.h"
@@ -364,6 +366,17 @@ void SArchOpeningExtractionPanel::Construct(const FArguments& /*InArgs*/)
 					.OnClicked(this, &SArchOpeningExtractionPanel::OnSpawnSplitActorsClicked)
 				]
 
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, 4, 0)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("BuildOpenings", "Build Openings"))
+					.ToolTipText(LOCTEXT("BuildOpeningsTip",
+						"Creates one Architectural Opening per movable group, assigns the fixed parts and that group's leaf to it, captures the closed pose and places the hinge. "
+						"A double door becomes two openings over one shared frame."))
+					.IsEnabled(this, &SArchOpeningExtractionPanel::CanCreateOpenings)
+					.OnClicked(this, &SArchOpeningExtractionPanel::OnCreateOpeningsClicked)
+				]
+
 				+ SHorizontalBox::Slot().AutoWidth().Padding(12, 0, 4, 0)
 				[
 					SNew(SButton)
@@ -428,9 +441,11 @@ bool SArchOpeningExtractionPanel::HasSession() const
 
 void SArchOpeningExtractionPanel::EndSession()
 {
+	// Guarded for editor shutdown, where the world may already be tearing down when the tab closes.
 	if (AActor* Actor = SessionActor.Get())
 	{
-		if (UWorld* World = Actor->GetWorld())
+		UWorld* World = Actor->GetWorld();
+		if (::IsValid(World) && !World->bIsTearingDown)
 		{
 			World->DestroyActor(Actor);
 		}
@@ -439,6 +454,7 @@ void SArchOpeningExtractionPanel::EndSession()
 	SessionActor = nullptr;
 	PieceSet = nullptr;
 	Analysis = FArchOpeningMeshAnalysis();
+	SpawnedActorsByGroup.Reset();
 
 	PieceRows.Reset();
 	GroupRows.Reset();
@@ -458,6 +474,31 @@ void SArchOpeningExtractionPanel::InvalidateViewport() const
 	if (GEditor != nullptr)
 	{
 		GEditor->RedrawLevelEditingViewports();
+	}
+}
+
+void SArchOpeningExtractionPanel::HandleRowMouseEnter(const FGeometry& /*Geometry*/, const FPointerEvent& /*Event*/, int32 PieceIndex)
+{
+	if (UArchOpeningPieceSetComponent* Set = GetPieceSet())
+	{
+		if (Set->HoveredPieceIndex != PieceIndex)
+		{
+			Set->HoveredPieceIndex = PieceIndex;
+			InvalidateViewport();
+		}
+	}
+}
+
+void SArchOpeningExtractionPanel::HandleRowMouseLeave(const FPointerEvent& /*Event*/, int32 PieceIndex)
+{
+	if (UArchOpeningPieceSetComponent* Set = GetPieceSet())
+	{
+		// Only clear our own hover: the pointer may already have entered the next row.
+		if (Set->HoveredPieceIndex == PieceIndex)
+		{
+			Set->HoveredPieceIndex = INDEX_NONE;
+			InvalidateViewport();
+		}
 	}
 }
 
@@ -761,7 +802,27 @@ TSharedRef<ITableRow> SArchOpeningExtractionPanel::MakeGroupRow(TSharedPtr<FArch
 				.Size(FVector2D(18.0f, 18.0f))
 			]
 
-			+ SHorizontalBox::Slot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(6, 2)
+			// Editable, because the group name ends up on the generated asset's name.
+			+ SHorizontalBox::Slot().FillWidth(0.5f).VAlign(VAlign_Center).Padding(6, 2)
+			[
+				SNew(SEditableTextBox)
+				.Text_Lambda([this, GroupIndex]()
+				{
+					const UArchOpeningPieceSetComponent* Set = GetPieceSet();
+					return (Set != nullptr && Set->Groups.IsValidIndex(GroupIndex))
+						? FText::FromName(Set->Groups[GroupIndex].GroupName)
+						: FText::GetEmpty();
+				})
+				.OnTextCommitted_Lambda([this, GroupIndex](const FText& NewText, ETextCommit::Type)
+				{
+					if (UArchOpeningPieceSetComponent* Set = GetPieceSet())
+					{
+						Set->RenameGroup(GroupIndex, FName(*NewText.ToString()));
+					}
+				})
+			]
+
+			+ SHorizontalBox::Slot().FillWidth(0.5f).VAlign(VAlign_Center).Padding(6, 2)
 			[
 				SNew(STextBlock)
 				.Text_Lambda([this, GroupIndex]()
@@ -776,9 +837,8 @@ TSharedRef<ITableRow> SArchOpeningExtractionPanel::MakeGroupRow(TSharedPtr<FArch
 					const bool bActive = (Set->ActiveGroupIndex == GroupIndex);
 
 					return FText::Format(
-						LOCTEXT("GroupRowFmt", "{0}{1}   -   {2} piece(s)   [{3}]"),
-						bActive ? LOCTEXT("ActiveMarker", "ACTIVE:  ") : FText::GetEmpty(),
-						FText::FromName(Group.GroupName),
+						LOCTEXT("GroupRowFmt", "{0}{1} piece(s)   [{2}]"),
+						bActive ? LOCTEXT("ActiveMarker", "ACTIVE   -   ") : FText::GetEmpty(),
 						FText::AsNumber(Set->CountPiecesInGroup(GroupIndex)),
 						Group.Role == EArchOpeningGroupRole::Stationary
 							? LOCTEXT("RoleFixed", "fixed")
@@ -887,7 +947,8 @@ TSharedRef<ITableRow> SArchOpeningExtractionPanel::MakePieceRow(TSharedPtr<FArch
 {
 	const int32 PieceIndex = Item.IsValid() ? Item->PieceIndex : INDEX_NONE;
 
-	return SNew(STableRow<TSharedPtr<FArchOpeningPieceRow>>, OwnerTable)
+	TSharedRef<STableRow<TSharedPtr<FArchOpeningPieceRow>>> Row =
+		SNew(STableRow<TSharedPtr<FArchOpeningPieceRow>>, OwnerTable)
 		[
 			SNew(SHorizontalBox)
 
@@ -948,43 +1009,31 @@ TSharedRef<ITableRow> SArchOpeningExtractionPanel::MakePieceRow(TSharedPtr<FArch
 				})
 			]
 
-			// Hovering the row highlights the piece in 3D, which is the other half of the link.
 			+ SHorizontalBox::Slot().AutoWidth().Padding(2, 1)
 			[
 				SNew(SButton)
 				.Text(LOCTEXT("AssignToActive", "-> Active"))
 				.ToolTipText(LOCTEXT("AssignToActiveTip", "Puts this piece in the active group."))
-				.OnHovered_Lambda([this, PieceIndex]()
-				{
-					if (UArchOpeningPieceSetComponent* Set = GetPieceSet())
-					{
-						Set->HoveredPieceIndex = PieceIndex;
-						InvalidateViewport();
-					}
-				})
-				.OnUnhovered_Lambda([this, PieceIndex]()
-				{
-					if (UArchOpeningPieceSetComponent* Set = GetPieceSet())
-					{
-						if (Set->HoveredPieceIndex == PieceIndex)
-						{
-							Set->HoveredPieceIndex = INDEX_NONE;
-							InvalidateViewport();
-						}
-					}
-				})
 				.OnClicked_Lambda([this, PieceIndex]()
 				{
 					if (UArchOpeningPieceSetComponent* Set = GetPieceSet())
 					{
 						Set->AssignPieceToGroup(PieceIndex, Set->ActiveGroupIndex);
-						RefreshGroupRows();
 						InvalidateViewport();
 					}
 					return FReply::Handled();
 				})
 			]
 		];
+
+	// Hover on the whole row rather than only the button: with thirty pieces, having to find a
+	// small button before the viewport highlights anything defeats the point.
+	Row->SetOnMouseEnter(FNoReplyPointerEventHandler::CreateSP(
+		this, &SArchOpeningExtractionPanel::HandleRowMouseEnter, PieceIndex));
+	Row->SetOnMouseLeave(FSimpleNoReplyPointerEventHandler::CreateSP(
+		this, &SArchOpeningExtractionPanel::HandleRowMouseLeave, PieceIndex));
+
+	return Row;
 }
 
 FReply SArchOpeningExtractionPanel::OnSelectAllClicked()
@@ -1161,6 +1210,7 @@ FReply SArchOpeningExtractionPanel::OnExtractClicked()
 	for (int32 GroupIndex = 0; GroupIndex < Set->Groups.Num(); ++GroupIndex)
 	{
 		FArchOpeningGroupExtractionRequest& Request = Requests.AddDefaulted_GetRef();
+		Request.SourceGroupIndex = GroupIndex;
 		Request.GroupName = Set->Groups[GroupIndex].GroupName;
 		Request.Role = Set->Groups[GroupIndex].Role;
 		Request.ExistingAsset = Set->Groups[GroupIndex].GeneratedMesh;
@@ -1193,16 +1243,13 @@ FReply SArchOpeningExtractionPanel::OnExtractClicked()
 		return FReply::Handled();
 	}
 
-	// Record what each group produced, so the next extraction updates these same assets.
+	// Record what each group produced, so the next extraction updates these same assets. Matched by
+	// index, not by name: names are editable and a rename between runs must not orphan an asset.
 	for (const FArchOpeningGroupExtractionOutput& Output : Result.Groups)
 	{
-		for (FArchOpeningExtractionGroup& Group : Set->Groups)
+		if (Set->Groups.IsValidIndex(Output.SourceGroupIndex))
 		{
-			if (Group.GroupName == Output.GroupName)
-			{
-				Group.GeneratedMesh = Output.Mesh.Get();
-				break;
-			}
+			Set->Groups[Output.SourceGroupIndex].GeneratedMesh = Output.Mesh.Get();
 		}
 	}
 
@@ -1251,14 +1298,24 @@ FReply SArchOpeningExtractionPanel::OnSpawnSplitActorsClicked()
 		return FReply::Handled();
 	}
 
+	AActor* SourceActor = Source->GetOwner();
+	if (SourceActor == nullptr)
+	{
+		StatusText = LOCTEXT("NoSourceActor", "The source component has no owning actor to place copies against.");
+		return FReply::Handled();
+	}
+
 	const FTransform SourceTransform = Source->GetComponentTransform();
 
 	const FScopedTransaction Transaction(LOCTEXT("SpawnSplitTransaction", "Spawn Split Opening Actors"));
 
 	TArray<AActor*> Spawned;
+	SpawnedActorsByGroup.Reset();
 
-	for (const FArchOpeningExtractionGroup& Group : Set->Groups)
+	for (int32 GroupIndex = 0; GroupIndex < Set->Groups.Num(); ++GroupIndex)
 	{
+		const FArchOpeningExtractionGroup& Group = Set->Groups[GroupIndex];
+
 		UStaticMesh* Mesh = Group.GeneratedMesh.LoadSynchronous();
 		if (Mesh == nullptr)
 		{
@@ -1280,7 +1337,7 @@ FReply SArchOpeningExtractionPanel::OnSpawnSplitActorsClicked()
 		// coordinates, so putting each actor on the source transform puts every piece back where it
 		// already was. That is what lets the opening be calibrated straight away.
 		Actor->SetActorScale3D(SourceTransform.GetScale3D());
-		Actor->SetActorLabel(FString::Printf(TEXT("%s_%s"), *Source->GetOwner()->GetActorLabel(), *Group.GroupName.ToString()));
+		Actor->SetActorLabel(FString::Printf(TEXT("%s_%s"), *SourceActor->GetActorLabel(), *Group.GroupName.ToString()));
 
 		if (UStaticMeshComponent* MeshComponent = Actor->GetStaticMeshComponent())
 		{
@@ -1295,6 +1352,7 @@ FReply SArchOpeningExtractionPanel::OnSpawnSplitActorsClicked()
 		}
 
 		Spawned.Add(Actor);
+		SpawnedActorsByGroup.Add(GroupIndex, Actor);
 	}
 
 	if (Spawned.IsEmpty())
@@ -1305,15 +1363,141 @@ FReply SArchOpeningExtractionPanel::OnSpawnSplitActorsClicked()
 
 	// The source actor is hidden rather than deleted: hiding is reversible and keeps the original
 	// available if the split turns out to be wrong.
-	if (AActor* SourceActor = Source->GetOwner())
-	{
-		SourceActor->Modify();
-		SourceActor->SetIsTemporarilyHiddenInEditor(true);
-	}
+	SourceActor->Modify();
+	SourceActor->SetIsTemporarilyHiddenInEditor(true);
 
 	StatusText = FText::Format(
-		LOCTEXT("SpawnedFmt", "Spawned {0} actor(s) on the source transform and hid the source actor. Assign them to an opening next."),
+		LOCTEXT("SpawnedFmt", "Spawned {0} actor(s) on the source transform and hid the source actor. 'Build Openings' will wire them up."),
 		FText::AsNumber(Spawned.Num()));
+
+	return FReply::Handled();
+}
+
+FReply SArchOpeningExtractionPanel::OnCreateOpeningsClicked()
+{
+	UArchOpeningPieceSetComponent* Set = GetPieceSet();
+	UStaticMeshComponent* Source = SourceComponent.Get();
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+
+	if (Set == nullptr || Source == nullptr || World == nullptr)
+	{
+		return FReply::Handled();
+	}
+
+	// Sort the spawned actors into the fixed parts every opening shares, and one leaf per movable
+	// group. A double door is two openings over one shared frame, which is exactly the runtime's
+	// model: one opening component drives one leaf.
+	TArray<AActor*> StationaryActors;
+	TArray<TPair<int32, AActor*>> MovableActors;
+
+	for (const TPair<int32, TWeakObjectPtr<AActor>>& Pair : SpawnedActorsByGroup)
+	{
+		AActor* Actor = Pair.Value.Get();
+		if (!::IsValid(Actor) || !Set->Groups.IsValidIndex(Pair.Key))
+		{
+			continue;
+		}
+
+		if (Set->Groups[Pair.Key].Role == EArchOpeningGroupRole::Stationary)
+		{
+			StationaryActors.Add(Actor);
+		}
+		else
+		{
+			MovableActors.Emplace(Pair.Key, Actor);
+		}
+	}
+
+	if (MovableActors.IsEmpty())
+	{
+		StatusText = LOCTEXT("NoMovableActors",
+			"No movable group has a spawned actor yet. Run Create / Update Group Assets, then Spawn Split Actors.");
+		return FReply::Handled();
+	}
+
+	// Deterministic ordering, so leaf 1 and leaf 2 keep their handing between runs.
+	MovableActors.Sort([](const TPair<int32, AActor*>& A, const TPair<int32, AActor*>& B)
+	{
+		return A.Key < B.Key;
+	});
+
+	const FTransform SourceTransform = Source->GetComponentTransform();
+
+	const FScopedTransaction Transaction(LOCTEXT("BuildOpeningsTransaction", "Build Openings From Split Actors"));
+
+	TArray<AActor*> CreatedOpenings;
+	int32 LeafOrdinal = 0;
+
+	for (const TPair<int32, AActor*>& Movable : MovableActors)
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.ObjectFlags = RF_Transactional;
+
+		AArchOpeningActor* OpeningActor = World->SpawnActor<AArchOpeningActor>(
+			SourceTransform.GetLocation(), SourceTransform.Rotator(), SpawnParams);
+
+		if (OpeningActor == nullptr)
+		{
+			continue;
+		}
+
+		UArchOpeningComponent* Opening = OpeningActor->GetOpening();
+		if (Opening == nullptr)
+		{
+			continue;
+		}
+
+		OpeningActor->SetActorLabel(FString::Printf(TEXT("Opening_%s"),
+			*Set->Groups[Movable.Key].GroupName.ToString()));
+
+		FText AssignError;
+
+		// Every opening shares the fixed parts. Stationary parts are only recorded, never driven,
+		// so two openings referencing the same frame do not fight over it.
+		for (AActor* StationaryActor : StationaryActors)
+		{
+			if (USceneComponent* Root = StationaryActor->GetRootComponent())
+			{
+				Opening->AssignPart(Root, EArchOpeningPartRole::Stationary, INDEX_NONE, AssignError);
+			}
+		}
+
+		if (USceneComponent* LeafRoot = Movable.Value->GetRootComponent())
+		{
+			Opening->AssignPart(LeafRoot, EArchOpeningPartRole::Leaf, INDEX_NONE, AssignError);
+		}
+
+		// Alternate the handing, which is the usual arrangement for a pair of leaves. It is only a
+		// starting point; the artist sets the real side, swing and angle in the setup panel.
+		Opening->Hinged.HingeSide = (LeafOrdinal % 2 == 0)
+			? EArchOpeningHingeSide::Left
+			: EArchOpeningHingeSide::Right;
+
+		Opening->SetCurrentPoseAsClosed();
+		Opening->SnapHingeToLeafEdge();
+
+		CreatedOpenings.Add(OpeningActor);
+		++LeafOrdinal;
+	}
+
+	if (CreatedOpenings.IsEmpty())
+	{
+		StatusText = LOCTEXT("OpeningsFailed", "No opening could be created.");
+		return FReply::Handled();
+	}
+
+	GEditor->SelectNone(/*bNoteSelectionChange*/ false, /*bDeselectBSPSurfs*/ true);
+	for (AActor* Created : CreatedOpenings)
+	{
+		GEditor->SelectActor(Created, /*bInSelected*/ true, /*bNotify*/ false);
+	}
+	GEditor->NoteSelectionChange();
+
+	StatusText = FText::Format(
+		LOCTEXT("OpeningsBuiltFmt",
+			"Built {0} opening(s), each with the fixed parts assigned, its own leaf, and the closed pose captured. "
+			"Open Window > Architectural Openings to set the outside direction, swing and timing."),
+		FText::AsNumber(CreatedOpenings.Num()));
 
 	return FReply::Handled();
 }
@@ -1381,6 +1565,26 @@ bool SArchOpeningExtractionPanel::CanExtract() const
 	}
 
 	return PopulatedGroups >= 2;
+}
+
+bool SArchOpeningExtractionPanel::CanCreateOpenings() const
+{
+	const UArchOpeningPieceSetComponent* Set = GetPieceSet();
+	if (Set == nullptr)
+	{
+		return false;
+	}
+
+	for (const TPair<int32, TWeakObjectPtr<AActor>>& Pair : SpawnedActorsByGroup)
+	{
+		if (Pair.Value.IsValid() && Set->Groups.IsValidIndex(Pair.Key) &&
+			Set->Groups[Pair.Key].Role == EArchOpeningGroupRole::Movable)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 bool SArchOpeningExtractionPanel::CanSpawnActors() const

@@ -43,6 +43,13 @@ They are guarded by `WITH_DEV_AUTOMATION_TESTS`, so they are not compiled into s
 | `SetOpennessAndStop` | `SetOpennessImmediate` applies at once, fires no transition events, and clamps out-of-range input; `SetOpennessAnimated` to a partial pose reports a motion stop but **not** a full-open event; `Stop` holds the pose, reports exactly one motion stop, does not fake an arrival, and a redundant `Stop` is inert. |
 | `HandleSequence` | A handle group with no valid meshes does not delay the leaf; a zero-angle group does not either. |
 
+### `ArchitecturalOpenings.Extraction.*`
+
+| Test | Verifies |
+|---|---|
+| `Groups` | Default stationary + movable pair; every piece starts stationary; **group names stay unique** when a group is removed and another added, and when one is renamed onto a taken name; removing a group returns its pieces to stationary and shifts later groups' assignments without re-pointing them at the wrong group; the stationary group cannot be removed. |
+| `Selection` | **Select Similar** finds identical and rotated copies of a moulding and rejects a same-sized piece with a different triangle count; assigning the ticked set moves exactly those pieces; invert / all / none / toggle behave as named; out-of-range indices are ignored rather than corrupting the set; pieces are findable by their stable key. |
+
 ---
 
 ## Manual editor tests
@@ -62,6 +69,8 @@ Every item below is **pending**.
 - [ ] Mid-motion reversal does not snap, with easing enabled.
 - [ ] Spamming the interact key produces one open, not repeated start sounds.
 - [ ] `Initial Openness` of 0.35 starts the leaf part-open at BeginPlay.
+- [ ] `Open` on a door that `Stop` left half way finishes opening it (it used to do nothing).
+- [ ] `Open` while an animated partial move is running retargets to fully open.
 - [ ] Zero durations and zero speeds behave safely in PIE.
 
 ### Handles
@@ -145,6 +154,12 @@ Every item below is **pending**.
 - [ ] Undo after extraction does not delete the asset files (documented, not a bug).
 - [ ] Closing the tab destroys the temporary editing actor; it never appears in a saved level.
 - [ ] Turning off viewport hover tracking stops the hit-proxy polling.
+- [ ] Hovering anywhere on a list row (not just its button) highlights the piece in the viewport.
+- [ ] Renaming a group changes the generated asset's name on the next extraction.
+- [ ] Emptying a group that already generated an asset produces the stale-asset note.
+- [ ] **Build Openings** on a double door creates two openings, each with the fixed parts and its
+      own leaf assigned, both calibrated, with opposite handing.
+- [ ] Each built opening previews and animates independently without fighting over the shared frame.
 
 ### Obstruction
 

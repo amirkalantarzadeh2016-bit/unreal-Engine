@@ -319,7 +319,14 @@ Open it with **Window > Opening Leaf Extraction**.
    piece is a click and a re-extract, not a redo.
 6. **Spawn Split Actors In Level** places one actor per group on the source's exact transform and
    hides the source. Movable groups are set Movable; stationary groups keep the source's mobility.
-   From there, select them and assign them to an opening exactly as in step 2 and 3 above.
+7. **Build Openings** then creates one Architectural Opening per movable group, assigns the fixed
+   parts and that group's leaf to it, captures the closed pose and snaps the hinge. A double door
+   becomes two openings sharing one frame, which is exactly how the runtime models it: one opening
+   component drives one leaf. The handing it picks - first leaf left, second right - is a starting
+   guess; set the real outside direction, swing and timing in the setup panel.
+
+Group names are editable in the group list and are kept unique, because they end up on the generated
+asset names.
 
 Keep the temporary editing actor selected while you work: component visualizers only draw for a
 selected actor, so clicking elsewhere in the level makes the boxes disappear until you select it

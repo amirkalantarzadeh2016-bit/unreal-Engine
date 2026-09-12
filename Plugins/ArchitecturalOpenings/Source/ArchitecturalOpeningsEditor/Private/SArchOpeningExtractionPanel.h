@@ -78,6 +78,7 @@ private:
 	// ---- Output ----------------------------------------------------------------------------
 	FReply OnExtractClicked();
 	FReply OnSpawnSplitActorsClicked();
+	FReply OnCreateOpeningsClicked();
 
 	// ---- State / labels --------------------------------------------------------------------
 	FText GetSourceLabel() const;
@@ -86,6 +87,7 @@ private:
 	bool CanAnalyze() const;
 	bool CanExtract() const;
 	bool CanSpawnActors() const;
+	bool CanCreateOpenings() const;
 
 	void RefreshRows();
 	void RefreshGroupRows();
@@ -95,6 +97,10 @@ private:
 
 	/** Marks the viewport dirty after any change that alters the drawing. */
 	void InvalidateViewport() const;
+
+	/** Row hover, so pointing at a list row highlights the piece in 3D and not just the button. */
+	void HandleRowMouseEnter(const FGeometry& Geometry, const FPointerEvent& Event, int32 PieceIndex);
+	void HandleRowMouseLeave(const FPointerEvent& Event, int32 PieceIndex);
 
 	// ---- Session data ----------------------------------------------------------------------
 	TWeakObjectPtr<UStaticMesh> SourceMesh;
@@ -121,6 +127,9 @@ private:
 
 	FText StatusText;
 	TSharedPtr<SVerticalBox> NotesBox;
+
+	/** Actors produced by Spawn Split Actors, so openings can be wired up from them afterwards. */
+	TMap<int32, TWeakObjectPtr<AActor>> SpawnedActorsByGroup;
 
 	FTSTicker::FDelegateHandle HoverTickerHandle;
 	int32 LastPolledMouseX = -1;

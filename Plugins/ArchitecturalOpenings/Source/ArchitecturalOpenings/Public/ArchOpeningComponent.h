@@ -113,10 +113,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Calibration")
 	bool bMovePartsWithOpening = true;
 
-	/** Draw the hinge/slide/proximity gizmos in the viewport even when the actor is not selected. */
-	UPROPERTY(EditAnywhere, Category = "Preview")
-	bool bAlwaysDrawGizmos = false;
-
 	// ----------------------------------------------------------------------------------------
 	// Events
 	// ----------------------------------------------------------------------------------------

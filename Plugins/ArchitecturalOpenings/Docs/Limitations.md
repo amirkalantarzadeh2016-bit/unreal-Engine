@@ -54,7 +54,9 @@ document says a thing has actually been observed.
 | Re-editable state (extraction profile asset) | Yes | Not yet | Not tested | Keyed on triangle ids; a re-import of the source can invalidate them |
 | In-place asset update on re-extraction | Yes | Not yet | Not tested | Refused for multi-LOD targets, which fall back to a new asset |
 | Spawn split actors in the level | Yes | Not yet | Not tested | Hides rather than deletes the source actor |
-| Automated tests | Yes | Yes | **Not run** | Solver, easing and state machine only; nothing that needs a world |
+| Build Openings from split actors | Yes | Not yet | Not tested | One opening per movable group, sharing the fixed parts; handing alternates as a starting guess only |
+| Group rename, unique names | Yes | Not yet | Automated (`Extraction.Groups`), not run | Names are de-duplicated automatically because they reach asset names |
+| Automated tests | Yes | Not yet | **Not run** | Solver, easing, state machine and extraction grouping/selection; nothing that needs a world |
 | Multiplayer replication | **Not implemented** | — | — | Out of scope for this version |
 | Double-leaf *motion* coordination, folding, roller shutters | **Not implemented** | — | — | Extraction now classifies multiple leaves, but the runtime still drives one leaf per opening component; use one opening per leaf |
 | Lock-and-key system | **Not implemented** | — | — | Out of scope; `SetInteractionEnabled` is the hook |
@@ -173,7 +175,11 @@ into a level.
   falls back to a new asset and says so.
 * **Group assignment changes are not on the undo stack.** The piece set lives on a transient actor,
   so there is nothing for a transaction to restore. Re-assigning a piece is one click, and the
-  profile is what carries the work between sessions. Spawning split actors *is* transacted.
+  profile is what carries the work between sessions. Spawning split actors and building openings
+  *are* transacted.
+* **A group emptied after it generated an asset leaves that asset stale.** The tool will not delete
+  or update an asset for a group with no pieces; it reports the situation in the notes and leaves
+  the file for you to delete.
 
 **Carried over into the generated assets:** vertex positions; per-instance normals, tangents,
 binormal signs and vertex colours; **every** UV channel; polygon-group material slot names and the
@@ -201,6 +207,9 @@ what ships.
   by hand. No asset-file rollback is implemented and none is promised.
 * "Spawn Split Actors In Level" **hides** the source actor rather than deleting it, so a bad split
   is reversible.
+* "Build Openings" creates one opening per movable group over the shared fixed parts, captures the
+  closed pose and snaps the hinge. The handing it picks (first leaf left, second right) is a
+  starting guess, not a reading of the geometry - check the outside direction and swing.
 
 **Unsupported case:** if the frame and the leaf are one connected piece, no selection of whole pieces
 can separate them. The tool says so plainly and produces nothing. It does not cut arbitrary geometry

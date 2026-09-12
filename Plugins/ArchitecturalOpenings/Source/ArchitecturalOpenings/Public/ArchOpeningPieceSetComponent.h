@@ -157,6 +157,11 @@ public:
 	 */
 	bool RemoveGroup(int32 GroupIndex);
 
+	/** Returns Desired, or Desired with a numeric suffix, so no two groups share a name. */
+	FName MakeUniqueGroupName(FName Desired, int32 IgnoreGroupIndex = INDEX_NONE) const;
+
+	void RenameGroup(int32 GroupIndex, FName NewName);
+
 	int32 CountPiecesInGroup(int32 GroupIndex) const;
 
 	FLinearColor GetGroupColor(int32 GroupIndex) const;

@@ -28,7 +28,9 @@ namespace ArchOpeningPiecePalette
 UArchOpeningPieceSetComponent::UArchOpeningPieceSetComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	bIsEditorOnly = true;
+
+	// Editor-only is expressed through the IsEditorOnly() override rather than by writing the
+	// engine's own bIsEditorOnly field, which is not part of the public surface.
 }
 
 // -------------------------------------------------------------------------------------------
@@ -57,11 +59,61 @@ int32 UArchOpeningPieceSetComponent::AddMovableGroup()
 		[](const FArchOpeningExtractionGroup& Group) { return Group.Role == EArchOpeningGroupRole::Movable; }).Num();
 
 	FArchOpeningExtractionGroup& Group = Groups.AddDefaulted_GetRef();
-	Group.GroupName = FName(*FString::Printf(TEXT("Movable Leaf %d"), MovableCount + 1));
 	Group.Role = EArchOpeningGroupRole::Movable;
 	Group.DisplayColor = ArchOpeningPiecePalette::MovableColors[MovableCount % ArchOpeningPiecePalette::NumMovableColors];
 
+	// Counting the movable groups is not enough on its own: removing "Movable Leaf 1" and adding a
+	// group would otherwise mint a second "Movable Leaf 2". Names end up on asset names, so they
+	// have to be unique.
+	Group.GroupName = MakeUniqueGroupName(FName(*FString::Printf(TEXT("Movable Leaf %d"), MovableCount + 1)),
+		Groups.Num() - 1);
+
 	return Groups.Num() - 1;
+}
+
+FName UArchOpeningPieceSetComponent::MakeUniqueGroupName(FName Desired, int32 IgnoreGroupIndex) const
+{
+	auto IsTaken = [this, IgnoreGroupIndex](FName Candidate)
+	{
+		for (int32 Index = 0; Index < Groups.Num(); ++Index)
+		{
+			if (Index != IgnoreGroupIndex && Groups[Index].GroupName == Candidate)
+			{
+				return true;
+			}
+		}
+		return false;
+	};
+
+	if (Desired.IsNone())
+	{
+		Desired = TEXT("Group");
+	}
+
+	if (!IsTaken(Desired))
+	{
+		return Desired;
+	}
+
+	const FString Base = Desired.ToString();
+	for (int32 Suffix = 2; Suffix < 1000; ++Suffix)
+	{
+		const FName Candidate(*FString::Printf(TEXT("%s %d"), *Base, Suffix));
+		if (!IsTaken(Candidate))
+		{
+			return Candidate;
+		}
+	}
+
+	return Desired;
+}
+
+void UArchOpeningPieceSetComponent::RenameGroup(int32 GroupIndex, FName NewName)
+{
+	if (Groups.IsValidIndex(GroupIndex))
+	{
+		Groups[GroupIndex].GroupName = MakeUniqueGroupName(NewName, GroupIndex);
+	}
 }
 
 bool UArchOpeningPieceSetComponent::RemoveGroup(int32 GroupIndex)

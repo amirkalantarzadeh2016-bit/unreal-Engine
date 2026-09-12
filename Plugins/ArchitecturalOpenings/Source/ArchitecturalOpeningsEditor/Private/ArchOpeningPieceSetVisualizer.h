@@ -38,8 +38,14 @@ struct HArchOpeningPieceProxy : public HComponentVisProxy
 class FArchOpeningPieceSetVisualizer : public FComponentVisualizer
 {
 public:
-	/** Total wireframe lines the optional per-triangle overlay is allowed to draw. */
-	static constexpr int32 MaxWireframeLines = 40000;
+	/**
+	 * Total wireframe lines the optional per-triangle overlay is allowed to draw.
+	 *
+	 * The overlay tests each triangle against every piece box, so its cost is triangles x pieces
+	 * per frame. This budget keeps that bounded on a dense mesh; beyond it the overlay simply
+	 * stops drawing, which is acceptable for a visual aid.
+	 */
+	static constexpr int32 MaxWireframeLines = 18000;
 
 	//~ Begin FComponentVisualizer Interface
 	virtual void DrawVisualization(const UActorComponent* Component, const FSceneView* View, FPrimitiveDrawInterface* PDI) override;

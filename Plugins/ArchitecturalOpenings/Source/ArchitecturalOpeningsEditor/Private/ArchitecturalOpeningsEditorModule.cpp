@@ -26,7 +26,7 @@
 #define LOCTEXT_NAMESPACE "ArchitecturalOpeningsEditor"
 
 const FName FArchitecturalOpeningsEditorModule::SetupPanelTabId(TEXT("ArchitecturalOpeningsSetup"));
-static const FName ArchOpeningExtractionTabId(TEXT("ArchitecturalOpeningsExtraction"));
+const FName FArchitecturalOpeningsEditorModule::ExtractionPanelTabId(TEXT("ArchitecturalOpeningsExtraction"));
 
 FArchitecturalOpeningsEditorModule& FArchitecturalOpeningsEditorModule::Get()
 {
@@ -78,7 +78,7 @@ void FArchitecturalOpeningsEditorModule::StartupModule()
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetLevelEditorCategory());
 
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
-		ArchOpeningExtractionTabId,
+		FArchitecturalOpeningsEditorModule::ExtractionPanelTabId,
 		FOnSpawnTab::CreateLambda([](const FSpawnTabArgs&)
 		{
 			return SNew(SDockTab)
@@ -108,7 +108,7 @@ void FArchitecturalOpeningsEditorModule::ShutdownModule()
 	UnregisterMenus();
 
 	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(SetupPanelTabId);
-	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(ArchOpeningExtractionTabId);
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(FArchitecturalOpeningsEditorModule::ExtractionPanelTabId);
 
 	if (bRegisteredVisualizer && GUnrealEd != nullptr)
 	{
@@ -165,7 +165,7 @@ void FArchitecturalOpeningsEditorModule::RegisterMenus()
 		FSlateIcon(),
 		FUIAction(FExecuteAction::CreateLambda([]()
 		{
-			FGlobalTabmanager::Get()->TryInvokeTab(ArchOpeningExtractionTabId);
+			FGlobalTabmanager::Get()->TryInvokeTab(FArchitecturalOpeningsEditorModule::ExtractionPanelTabId);
 		})));
 }
 

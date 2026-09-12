@@ -14,6 +14,7 @@
 #include "Engine/Selection.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "Framework/Docking/TabManager.h"
 #include "Modules/ModuleManager.h"
 #include "IDetailsView.h"
 #include "PropertyEditorModule.h"
@@ -945,7 +946,9 @@ float SArchOpeningSetupPanel::GetPreviewScrub() const
 
 FReply SArchOpeningSetupPanel::OnOpenExtractionClicked()
 {
-	StatusMessage = LOCTEXT("ExtractionHint", "Select the source Static Mesh Actor in the level, then use Window > Architectural Openings > Leaf Extraction.");
+	FGlobalTabmanager::Get()->TryInvokeTab(FArchitecturalOpeningsEditorModule::ExtractionPanelTabId);
+
+	StatusMessage = LOCTEXT("ExtractionHint", "Select the source Static Mesh Actor in the level, then press 'Use Selected Static Mesh' in the extraction tab.");
 	RefreshValidation();
 	return FReply::Handled();
 }

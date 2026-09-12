@@ -661,11 +661,19 @@ bool UArchOpeningExtractionSubsystem::ExtractGroups(
 	// Groups with no pieces produce no asset: an empty "Movable Leaf 2" left over from an
 	// experiment must not write an empty mesh.
 	TArray<const FArchOpeningGroupExtractionRequest*> PopulatedRequests;
+	TArray<FName> EmptiedGroupsWithAssets;
+
 	for (const FArchOpeningGroupExtractionRequest& Request : Requests)
 	{
 		if (!Request.PieceIndices.IsEmpty())
 		{
 			PopulatedRequests.Add(&Request);
+		}
+		else if (!Request.ExistingAsset.IsNull())
+		{
+			// A group that produced an asset before and has since been emptied: its asset is now
+			// stale and nothing here will update or delete it. Say so rather than leave it lurking.
+			EmptiedGroupsWithAssets.Add(Request.GroupName);
 		}
 	}
 
@@ -717,6 +725,7 @@ bool UArchOpeningExtractionSubsystem::ExtractGroups(
 		}
 
 		FArchOpeningGroupExtractionOutput Output;
+		Output.SourceGroupIndex = Request->SourceGroupIndex;
 		Output.GroupName = Request->GroupName;
 		Output.Role = Request->Role;
 		Output.TriangleCount = Triangles.Num();
@@ -797,6 +806,14 @@ bool UArchOpeningExtractionSubsystem::ExtractGroups(
 		"Sockets and any custom asset metadata on the source were not carried over."));
 	OutResult.Notes.Add(LOCTEXT("NoteUndo",
 		"Undo does not delete created assets. Undo can revert level changes, but newly created assets must be deleted from the Content Browser by hand. Packages are marked dirty and are not saved until you save them."));
+
+	for (const FName& EmptiedGroup : EmptiedGroupsWithAssets)
+	{
+		OutResult.Notes.Add(FText::Format(
+			LOCTEXT("NoteEmptiedGroupFmt",
+				"Group '{0}' has no pieces any more, but it previously generated an asset. That asset was left untouched and is now stale - delete it, or re-assign pieces to the group."),
+			FText::FromName(EmptiedGroup)));
+	}
 
 	if (bAnyFallbackToNewAsset)
 	{

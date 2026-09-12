@@ -77,18 +77,24 @@ void UArchOpeningComponent::Open(EArchOpeningCommandSource Source)
 		return;
 	}
 
-	// Idempotent: an Open while already open or already opening changes nothing, which is what
-	// stops repeated commands from re-firing events or restarting the start sound.
-	const bool bAlreadyHeadingOpen =
-		State == EArchOpeningState::Open ||
-		State == EArchOpeningState::Opening ||
-		State == EArchOpeningState::OpeningDelay ||
-		(State == EArchOpeningState::HandlePreparation && bTransitionOpening);
+	// Idempotent, but only against a transition that is genuinely heading to FULLY open.
+	//
+	// The Open state doubles as "idle at any openness above zero", and a transition may be aimed at
+	// a partial target from SetOpennessAnimated, so testing the state alone would silently ignore
+	// Open() on a door that Stop() left half way.
+	const bool bIdleFullyOpen =
+		State == EArchOpeningState::Open && Openness >= 1.0f - ArchOpeningMotion::OpennessEpsilon;
 
-	if (bAlreadyHeadingOpen)
+	const bool bTransitionAimedFullyOpen =
+		(State == EArchOpeningState::Opening ||
+		 State == EArchOpeningState::OpeningDelay ||
+		 (State == EArchOpeningState::HandlePreparation && bTransitionOpening)) &&
+		TransitionEndOpenness >= 1.0f - ArchOpeningMotion::OpennessEpsilon;
+
+	if (bIdleFullyOpen || bTransitionAimedFullyOpen)
 	{
 		// Still cancel a pending auto-close: the user asked for it to stay open.
-		if (State == EArchOpeningState::Open && Source != EArchOpeningCommandSource::AutoClose)
+		if (bIdleFullyOpen && Source != EArchOpeningCommandSource::AutoClose)
 		{
 			CancelDeferredClose();
 			if (Timing.bAutoClose)
@@ -111,6 +117,7 @@ void UArchOpeningComponent::Open(EArchOpeningCommandSource Source)
 	if (Timing.DelayBeforeOpening > 0.0f)
 	{
 		bTransitionOpening = true;
+		TransitionEndOpenness = 1.0f;	// Recorded now so the guards above can read the intent.
 		StateTimer = Timing.DelayBeforeOpening;
 		EnterState(EArchOpeningState::OpeningDelay);
 		UpdateTickEnabled();
@@ -124,9 +131,10 @@ void UArchOpeningComponent::Close(EArchOpeningCommandSource Source)
 {
 	const bool bAlreadyHeadingClosed =
 		State == EArchOpeningState::Closed ||
-		State == EArchOpeningState::Closing ||
-		State == EArchOpeningState::ClosingDelay ||
-		(State == EArchOpeningState::HandlePreparation && !bTransitionOpening);
+		((State == EArchOpeningState::Closing ||
+		  State == EArchOpeningState::ClosingDelay ||
+		  (State == EArchOpeningState::HandlePreparation && !bTransitionOpening)) &&
+		 TransitionEndOpenness <= ArchOpeningMotion::OpennessEpsilon);
 
 	// A manual close from inside the proximity trigger suppresses proximity re-opening until the
 	// trigger empties. Recorded even for a redundant command so the intent is not lost.
@@ -153,6 +161,7 @@ void UArchOpeningComponent::Close(EArchOpeningCommandSource Source)
 	if (Timing.DelayBeforeClosing > 0.0f)
 	{
 		bTransitionOpening = false;
+		TransitionEndOpenness = 0.0f;	// Recorded now so the guards above can read the intent.
 		StateTimer = Timing.DelayBeforeClosing;
 		EnterState(EArchOpeningState::ClosingDelay);
 		UpdateTickEnabled();

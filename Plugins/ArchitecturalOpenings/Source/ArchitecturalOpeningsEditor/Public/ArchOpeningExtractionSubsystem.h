@@ -62,6 +62,9 @@ struct FArchOpeningMeshAnalysis
 /** One group's share of an extraction. */
 struct FArchOpeningGroupExtractionRequest
 {
+	/** Index of the group in the piece set, echoed back on the output so results map back exactly. */
+	int32 SourceGroupIndex = INDEX_NONE;
+
 	FName GroupName;
 	EArchOpeningGroupRole Role = EArchOpeningGroupRole::Movable;
 
@@ -75,6 +78,9 @@ struct FArchOpeningGroupExtractionRequest
 /** What one group produced. */
 struct FArchOpeningGroupExtractionOutput
 {
+	/** The requesting group's index. Matching results back by name would break on a rename. */
+	int32 SourceGroupIndex = INDEX_NONE;
+
 	FName GroupName;
 	EArchOpeningGroupRole Role = EArchOpeningGroupRole::Movable;
 	TWeakObjectPtr<UStaticMesh> Mesh;
