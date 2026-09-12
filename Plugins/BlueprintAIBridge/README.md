@@ -83,3 +83,58 @@ longer matches rather than editing the wrong node.
 | `BPDiffEngine` | Baseline vs. AI reply to a list of reviewable `FBPDiffItem`s |
 | `BPImporter` | Accepted diff items to live `UEdGraph` / `UK2Node` mutations |
 | `SBPAIBridgePanel` | The dockable Slate panel |
+
+## Graph Formatter
+
+**Format Graph** (toolbar button at the top of the panel) tidies the graphs the export scope
+combo currently selects — all of them, or just the one.
+
+What a run does, in order:
+
+1. Writes a pre-format snapshot via `FBPSnapshotStore`.
+2. Opens one editor transaction covering everything below.
+3. `FBPGraphClusterDetector` splits each graph into connected subgraphs (union-find over every
+   pin connection) and classifies each one.
+4. `FBPGraphLayoutEngine` lays each cluster out left to right and stacks the clusters vertically.
+5. `FBPGraphAnnotator` draws or resizes one comment box per cluster.
+
+Ctrl+Z restores every node position and removes every comment box the run created. The snapshot
+records the Blueprint's logical structure, not its geometry — it is a safety net for the graph,
+not an undo for the layout.
+
+### Layout
+
+Layering is Sugiyama-style and exec-first: nodes with exec pins are ranked by longest path over
+exec edges alone, then data edges between two exec nodes refine that ranking, and finally pure
+and data-only nodes are seated immediately left of the earliest node that consumes them. Within
+a layer, a barycentre sweep orders nodes to cut edge crossings.
+
+`HorizontalPadding` and `VerticalPadding` (defaults 280 x 160) are the grid *step*, not the gap.
+A layer holding an unusually wide node widens its own column rather than letting that node
+overlap the next one; the same applies vertically.
+
+Node footprints are estimated from title length and pin count. A node's true size is computed by
+its Slate widget, which only exists while the graph is open, so `NodeWidth`/`NodeHeight` are
+usually zero outside the graph editor; where they are set they are trusted instead.
+
+### Cluster types
+
+Classification runs in a fixed precedence, first match wins:
+
+| Type | Test |
+| --- | --- |
+| Event | contains a `UK2Node_Event` |
+| Pure | every node is pure (reroute nodes do not count against it) |
+| Control Flow | contains `UK2Node_IfThenElse`, `UK2Node_Switch`, or a loop macro instance |
+| Error Handling | a node title contains "error", "validate" or "validation" |
+| Output | contains `UK2Node_VariableSet` or `UK2Node_FunctionResult` |
+| Logic | anything else |
+
+### Settings
+
+Project Settings > Plugins > **Blueprint Formatter** (`UBPAIBridgeSettings`): padding and
+cluster spacing, `bAutoFormatAfterApply`, comment padding, the minimum cluster size worth
+annotating, and a colour per cluster type.
+
+Logging goes to `LogBPFormatter`: node count, cluster count, and the graph's bounding box before
+and after each run.

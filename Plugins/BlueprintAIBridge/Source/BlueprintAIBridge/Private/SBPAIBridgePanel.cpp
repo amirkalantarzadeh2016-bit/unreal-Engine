@@ -6,12 +6,15 @@
 #include "BPDiffEngine.h"
 #include "BPExporter.h"
 #include "BPImporter.h"
+#include "BPFormatterSettings.h"
+#include "BPGraphLayoutEngine.h"
 #include "BPSnapshotStore.h"
 #include "BlueprintAIBridgeModule.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
 #include "HAL/PlatformApplicationMisc.h"
 #include "Misc/MessageDialog.h"
+#include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Styling/AppStyle.h"
 #include "Styling/CoreStyle.h"
@@ -85,6 +88,12 @@ void SBPAIBridgePanel::Construct(const FArguments& InArgs)
 		.Padding(8.0f)
 		[
 			SNew(SScrollBox)
+
+			+ SScrollBox::Slot()
+			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
+			[
+				BuildToolbar()
+			]
 
 			// ---- Source ------------------------------------------------------------------
 			+ SScrollBox::Slot()
@@ -318,6 +327,86 @@ void SBPAIBridgePanel::Construct(const FArguments& InArgs)
 			]
 		]
 	];
+}
+
+// ---------------------------------------------------------------------------------------
+// Toolbar
+// ---------------------------------------------------------------------------------------
+
+TSharedRef<SWidget> SBPAIBridgePanel::BuildToolbar()
+{
+	FToolBarBuilder ToolbarBuilder(TSharedPtr<FUICommandList>(), FMultiBoxCustomization::None);
+
+	ToolbarBuilder.BeginSection(TEXT("GraphFormatting"));
+	{
+		ToolbarBuilder.AddToolBarButton(
+			FUIAction(
+				FExecuteAction::CreateSP(this, &SBPAIBridgePanel::OnFormatGraphExecute),
+				FCanExecuteAction::CreateSP(this, &SBPAIBridgePanel::CanFormatGraph)),
+			NAME_None,
+			LOCTEXT("FormatGraphLabel", "Format Graph"),
+			LOCTEXT("FormatGraphTooltip", "Lay the selected graphs out left to right and draw a comment box around each cluster. Undoable with Ctrl+Z."),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "GraphEditor.AlignNodesLeft"));
+	}
+	ToolbarBuilder.EndSection();
+
+	return ToolbarBuilder.MakeWidget();
+}
+
+bool SBPAIBridgePanel::CanFormatGraph() const
+{
+	return SelectedBlueprint.IsValid();
+}
+
+void SBPAIBridgePanel::OnFormatGraphExecute()
+{
+	const FBPFormatResult Result = FormatGraphsInScope();
+	UpdateStatus(Result.ToString(), !Result.bSuccess);
+}
+
+TArray<UEdGraph*> SBPAIBridgePanel::GetGraphsInScope() const
+{
+	TArray<UEdGraph*> Graphs;
+
+	UBlueprint* Blueprint = SelectedBlueprint.Get();
+	if (Blueprint == nullptr)
+	{
+		return Graphs;
+	}
+
+	FBPExporter::CollectGraphs(Blueprint, Graphs);
+
+	// GraphOptions[0] is "All Graphs"; any later entry narrows the scope to that one graph.
+	const int32 OptionIndex = SelectedGraphOption.IsValid() ? GraphOptions.IndexOfByKey(SelectedGraphOption) : 0;
+	if (OptionIndex > 0 && Graphs.IsValidIndex(OptionIndex - 1))
+	{
+		UEdGraph* Single = Graphs[OptionIndex - 1];
+		Graphs.Reset();
+		Graphs.Add(Single);
+	}
+
+	return Graphs;
+}
+
+FBPFormatResult SBPAIBridgePanel::FormatGraphsInScope()
+{
+	FBPFormatResult Result;
+
+	UBlueprint* Blueprint = SelectedBlueprint.Get();
+	if (Blueprint == nullptr)
+	{
+		Result.Warnings.Add(TEXT("Select a Blueprint first."));
+		return Result;
+	}
+
+	const TArray<UEdGraph*> Graphs = GetGraphsInScope();
+	if (Graphs.Num() == 0)
+	{
+		Result.Warnings.Add(TEXT("This Blueprint has no graphs to format."));
+		return Result;
+	}
+
+	return FBPGraphLayoutEngine::FormatBlueprint(Blueprint, Graphs);
 }
 
 // ---------------------------------------------------------------------------------------
@@ -695,14 +784,28 @@ FReply SBPAIBridgePanel::OnApplyChangesClicked()
 	}
 
 	const FBPImportResult Result = FBPImporter::ApplyDiff(Blueprint, Accepted);
-	UpdateStatus(Result.ToString(), !Result.bSuccess);
+	FString StatusMessage = Result.ToString();
+	bool bStatusIsError = !Result.bSuccess;
 
 	// The graph has moved on, so the node ids in the current diff no longer mean anything.
 	if (Result.AppliedCount > 0)
 	{
 		ClearDiff();
 		LastExportJson.Reset();
+
+		const UBPAIBridgeSettings* Settings = GetDefault<UBPAIBridgeSettings>();
+		if (Settings != nullptr && Settings->bAutoFormatAfterApply)
+		{
+			// Imported nodes land in a column off to the side of everything else, so this is
+			// the point where a re-layout earns its churn. It is a separate undo step, which
+			// means Ctrl+Z backs out the formatting first and the import second.
+			const FBPFormatResult FormatResult = FormatGraphsInScope();
+			StatusMessage += FString::Printf(TEXT("\n%s"), *FormatResult.ToString());
+			bStatusIsError |= !FormatResult.bSuccess;
+		}
 	}
+
+	UpdateStatus(StatusMessage, bStatusIsError);
 
 	return FReply::Handled();
 }

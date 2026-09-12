@@ -24,6 +24,7 @@ public class BlueprintAIBridge : ModuleRules
 				"Json",
 				"JsonUtilities",
 				"ApplicationCore",
+				"DeveloperSettings",
 				"ToolMenus",
 				"LevelEditor"
 			});

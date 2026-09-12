@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "BPDiffEngine.h"
 #include "BPExporter.h"
+#include "BPGraphLayoutEngine.h"
 #include "Widgets/Input/SComboBox.h"
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/Views/STableRow.h"
@@ -15,6 +16,7 @@ class SMultiLineEditableTextBox;
 class STableViewBase;
 class STextBlock;
 class UBlueprint;
+class UEdGraph;
 struct FAssetData;
 
 /**
@@ -66,6 +68,20 @@ private:
 	void OnGraphSelectionChanged(TSharedPtr<FString> NewSelection, ESelectInfo::Type SelectInfo);
 	FText GetContextComboText() const;
 	FText GetGraphComboText() const;
+
+	// ---- Toolbar -----------------------------------------------------------------------
+	TSharedRef<SWidget> BuildToolbar();
+	void OnFormatGraphExecute();
+	bool CanFormatGraph() const;
+
+	/** The graphs the export scope combo currently selects: all of them, or just the one. */
+	TArray<UEdGraph*> GetGraphsInScope() const;
+
+	/**
+	 * Formats GetGraphsInScope(). Leaves the status line alone so callers can decide what to
+	 * say -- the apply path has an import result to report alongside this one.
+	 */
+	FBPFormatResult FormatGraphsInScope();
 
 	// ---- Button handlers ---------------------------------------------------------------
 	FReply OnExportClicked();
