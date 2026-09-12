@@ -103,10 +103,23 @@ FBPLayoutOptions FBPLayoutOptions::FromSettings(const UBPAIBridgeSettings* Setti
 
 FString FBPFormatResult::ToString() const
 {
-	FString Text = FString::Printf(
-		TEXT("%s: %d graph(s), %d node(s), %d cluster(s); %d comment(s) created, %d updated."),
-		bSuccess ? TEXT("Format complete") : TEXT("Format failed"),
-		GraphCount, NodeCount, ClusterCount, CommentsCreated, CommentsUpdated);
+	FString Text;
+
+	if (bSuccess)
+	{
+		Text = FString::Printf(
+			TEXT("Format complete: %d graph(s), %d node(s), %d cluster(s); %d comment(s) created, %d updated."),
+			GraphCount, NodeCount, ClusterCount, CommentsCreated, CommentsUpdated);
+	}
+	else if (GraphCount == 0 && Warnings.Num() == 0)
+	{
+		// Nothing went wrong; there was simply nothing in scope worth moving.
+		Text = TEXT("Format: nothing to do. The selected graphs have no nodes to lay out.");
+	}
+	else
+	{
+		Text = FString::Printf(TEXT("Format failed: %d graph(s) formatted."), GraphCount);
+	}
 
 	for (const FString& Warning : Warnings)
 	{
@@ -385,7 +398,6 @@ void FBPGraphLayoutEngine::AssignLayers(
 void FBPGraphLayoutEngine::OrderWithinLayers(
 	const TArray<UEdGraphNode*>& Nodes,
 	const TMap<UEdGraphNode*, int32>& NodeToIndex,
-	const TArray<int32>& Layers,
 	TArray<TArray<int32>>& InOutLayerContents)
 {
 	// Predecessor and successor lists, used to pull a node towards the nodes it connects to.
@@ -533,7 +545,7 @@ FBox2D FBPGraphLayoutEngine::PlaceCluster(
 		LayerContents[Layers[Index]].Add(Index);
 	}
 
-	OrderWithinLayers(Nodes, NodeToIndex, Layers, LayerContents);
+	OrderWithinLayers(Nodes, NodeToIndex, LayerContents);
 
 	// Column steps. HorizontalPadding is the step, not the gap, so the defaults land on the
 	// familiar Blueprint grid -- but a layer holding an unusually wide node widens its own step
@@ -624,6 +636,24 @@ FBPFormatResult FBPGraphLayoutEngine::FormatBlueprint(UBlueprint* Blueprint, con
 		return Result;
 	}
 
+	// The same graph arriving twice would be laid out twice, and the second pass would then
+	// annotate against bounds the first pass had already moved.
+	TArray<UEdGraph*> UniqueGraphs;
+	UniqueGraphs.Reserve(Graphs.Num());
+	for (UEdGraph* Graph : Graphs)
+	{
+		if (Graph != nullptr)
+		{
+			UniqueGraphs.AddUnique(Graph);
+		}
+	}
+
+	if (UniqueGraphs.Num() == 0)
+	{
+		Result.Warnings.Add(TEXT("No valid graphs to format."));
+		return Result;
+	}
+
 	const UBPAIBridgeSettings* Settings = GetDefault<UBPAIBridgeSettings>();
 	const FBPLayoutOptions Options = FBPLayoutOptions::FromSettings(Settings);
 
@@ -650,13 +680,8 @@ FBPFormatResult FBPGraphLayoutEngine::FormatBlueprint(UBlueprint* Blueprint, con
 
 	Blueprint->Modify();
 
-	for (UEdGraph* Graph : Graphs)
+	for (UEdGraph* Graph : UniqueGraphs)
 	{
-		if (Graph == nullptr)
-		{
-			continue;
-		}
-
 		TArray<FBPGraphCluster> Clusters = FBPGraphClusterDetector::DetectClusters(Graph);
 		if (Clusters.Num() == 0)
 		{

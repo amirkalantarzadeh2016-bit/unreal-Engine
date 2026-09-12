@@ -60,7 +60,12 @@ private:
 	// ---- Blueprint picker --------------------------------------------------------------
 	FString GetBlueprintPath() const;
 	void OnBlueprintChanged(const FAssetData& AssetData);
-	void RefreshGraphOptions();
+	/**
+	 * Rebuilds the export scope combo from the Blueprint's current graphs.
+	 * @param bPreserveSelection  keep the selected graph if a graph of that name still exists;
+	 *                            otherwise the scope resets to "All Graphs".
+	 */
+	void RefreshGraphOptions(bool bPreserveSelection = false);
 
 	// ---- Combo boxes -------------------------------------------------------------------
 	TSharedRef<SWidget> MakeComboItemWidget(TSharedPtr<FString> Item) const;
@@ -108,6 +113,12 @@ private:
 	// ---- Helpers -----------------------------------------------------------------------
 	void UpdateStatus(const FString& Message, bool bIsError = false);
 	void ClearDiff();
+
+	/**
+	 * Index of the graph the scope combo selects, within FBPExporter::CollectGraphs order, or
+	 * INDEX_NONE when the scope is "All Graphs" or the named graph is gone.
+	 */
+	int32 FindSelectedGraphIndex() const;
 
 	/** Builds the export options implied by the current combo selections. */
 	FBPExportOptions MakeExportOptions() const;

@@ -282,6 +282,7 @@ TArray<FBPGraphCluster> FBPGraphClusterDetector::DetectClusters(UEdGraph* Graph)
 		Clusters[Index].ClusterIndex = Index;
 		Clusters[Index].Type = ClassifyCluster(Clusters[Index].Nodes);
 		Clusters[Index].Bounds = FBPGraphLayoutEngine::ComputeNodesBounds(Clusters[Index].Nodes);
+		Clusters[Index].PreLayoutBounds = Clusters[Index].Bounds;
 	}
 
 	return Clusters;

@@ -102,6 +102,12 @@ Ctrl+Z restores every node position and removes every comment box the run create
 records the Blueprint's logical structure, not its geometry — it is a safety net for the graph,
 not an undo for the layout.
 
+Re-running is idempotent. Within a session, comment boxes are tracked per graph by pointer;
+across sessions they are recognised by title plus overlap with the region the cluster occupied
+before the run's layout. Comment nodes are excluded from layout, so a box from a previous run is
+still sitting over its old cluster when the next run looks for it. A box no cluster claims is
+left alone and reported as a warning rather than deleted.
+
 ### Layout
 
 Layering is Sugiyama-style and exec-first: nodes with exec pins are ranked by longest path over

@@ -20,6 +20,25 @@ namespace BPAnnotatorInternal
 
 	/** Font size for generated comment titles. */
 	constexpr int32 CommentFontSize = 18;
+
+	/** Area shared by two boxes, or zero when they do not meet. */
+	float IntersectionArea(const FBox2D& A, const FBox2D& B)
+	{
+		if (!A.bIsValid || !B.bIsValid)
+		{
+			return 0.0f;
+		}
+
+		const float Width = FMath::Min(A.Max.X, B.Max.X) - FMath::Max(A.Min.X, B.Min.X);
+		const float Height = FMath::Min(A.Max.Y, B.Max.Y) - FMath::Max(A.Min.Y, B.Min.Y);
+
+		if (Width <= 0.0f || Height <= 0.0f)
+		{
+			return 0.0f;
+		}
+
+		return Width * Height;
+	}
 }
 
 using namespace BPAnnotatorInternal;
@@ -66,6 +85,23 @@ void FBPGraphAnnotator::ForgetGraph(UEdGraph* Graph)
 	TrackedComments.Remove(Graph);
 }
 
+FBox2D FBPGraphAnnotator::GetCommentBounds(const UEdGraphNode_Comment* Comment)
+{
+	if (Comment == nullptr)
+	{
+		return FBox2D(ForceInit);
+	}
+
+	const FVector2D Min(static_cast<float>(Comment->NodePosX), static_cast<float>(Comment->NodePosY));
+	const FVector2D Size(static_cast<float>(Comment->NodeWidth), static_cast<float>(Comment->NodeHeight));
+
+	FBox2D Bounds(ForceInit);
+	Bounds += Min;
+	Bounds += Min + Size;
+
+	return Bounds;
+}
+
 TArray<UEdGraphNode_Comment*> FBPGraphAnnotator::GatherCandidates(UEdGraph* Graph)
 {
 	TArray<UEdGraphNode_Comment*> Candidates;
@@ -73,6 +109,16 @@ TArray<UEdGraphNode_Comment*> FBPGraphAnnotator::GatherCandidates(UEdGraph* Grap
 	if (Graph == nullptr)
 	{
 		return Candidates;
+	}
+
+	// Graphs that have been destroyed leave dead keys behind; clear them out while we are here
+	// so a long editing session does not accumulate them.
+	for (auto It = TrackedComments.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid())
+		{
+			It.RemoveCurrent();
+		}
 	}
 
 	if (TArray<TWeakObjectPtr<UEdGraphNode_Comment>>* Tracked = TrackedComments.Find(Graph))
@@ -115,18 +161,13 @@ UEdGraphNode_Comment* FBPGraphAnnotator::FindExistingComment(
 	const TArray<UEdGraphNode_Comment*>& Candidates,
 	TSet<UEdGraphNode_Comment*>& InOutClaimed)
 {
-	TSet<UObject*> ClusterNodes;
-	ClusterNodes.Reserve(Cluster.Nodes.Num());
-	for (UEdGraphNode* Node : Cluster.Nodes)
+	if (!Cluster.PreLayoutBounds.bIsValid)
 	{
-		if (Node != nullptr)
-		{
-			ClusterNodes.Add(Node);
-		}
+		return nullptr;
 	}
 
 	UEdGraphNode_Comment* Best = nullptr;
-	int32 BestOverlap = 0;
+	float BestOverlap = 0.0f;
 
 	for (UEdGraphNode_Comment* Comment : Candidates)
 	{
@@ -135,15 +176,9 @@ UEdGraphNode_Comment* FBPGraphAnnotator::FindExistingComment(
 			continue;
 		}
 
-		int32 Overlap = 0;
-		for (const auto& Element : Comment->NodesUnderComment)
-		{
-			if (ClusterNodes.Contains(ToRawPtr(Element)))
-			{
-				++Overlap;
-			}
-		}
-
+		// Matching on where the cluster was, not where it now is: layout has already run, but
+		// comment boxes were left out of it, so an existing box is still over its old cluster.
+		const float Overlap = IntersectionArea(GetCommentBounds(Comment), Cluster.PreLayoutBounds);
 		if (Overlap > BestOverlap)
 		{
 			BestOverlap = Overlap;
@@ -203,7 +238,9 @@ void FBPGraphAnnotator::ApplyComment(
 	Comment->FontSize = CommentFontSize;
 	Comment->bCommentBubbleVisible = false;
 
-	// Group movement is what makes the box useful: dragging it carries its cluster along.
+	// Group movement is what makes the box useful: dragging it carries its cluster along. The
+	// editor works out which nodes that is from the box's geometry each time it moves, so there
+	// is nothing for the formatter to record here.
 	Comment->MoveMode = ECommentBoxMode::GroupMovement;
 
 	const FVector2D Min = Cluster.Bounds.Min - FVector2D(Padding, Padding + TitleBarHeight);
@@ -213,16 +250,6 @@ void FBPGraphAnnotator::ApplyComment(
 	Comment->NodePosY = FMath::RoundToInt32(Min.Y);
 	Comment->NodeWidth = FMath::RoundToInt32(Size.X);
 	Comment->NodeHeight = FMath::RoundToInt32(Size.Y);
-
-	// Rebuilt rather than appended to, so a node that left the cluster stops being dragged by it.
-	Comment->ClearNodesUnderComment();
-	for (UEdGraphNode* Node : Cluster.Nodes)
-	{
-		if (Node != nullptr)
-		{
-			Comment->AddNodeUnderComment(Node);
-		}
-	}
 }
 
 FBPAnnotationResult FBPGraphAnnotator::AnnotateClusters(

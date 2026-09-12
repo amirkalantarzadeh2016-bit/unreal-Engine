@@ -376,11 +376,10 @@ TArray<UEdGraph*> SBPAIBridgePanel::GetGraphsInScope() const
 
 	FBPExporter::CollectGraphs(Blueprint, Graphs);
 
-	// GraphOptions[0] is "All Graphs"; any later entry narrows the scope to that one graph.
-	const int32 OptionIndex = SelectedGraphOption.IsValid() ? GraphOptions.IndexOfByKey(SelectedGraphOption) : 0;
-	if (OptionIndex > 0 && Graphs.IsValidIndex(OptionIndex - 1))
+	const int32 GraphIndex = FindSelectedGraphIndex();
+	if (GraphIndex != INDEX_NONE && Graphs.IsValidIndex(GraphIndex))
 	{
-		UEdGraph* Single = Graphs[OptionIndex - 1];
+		UEdGraph* Single = Graphs[GraphIndex];
 		Graphs.Reset();
 		Graphs.Add(Single);
 	}
@@ -444,8 +443,12 @@ void SBPAIBridgePanel::OnBlueprintChanged(const FAssetData& AssetData)
 	}
 }
 
-void SBPAIBridgePanel::RefreshGraphOptions()
+void SBPAIBridgePanel::RefreshGraphOptions(bool bPreserveSelection)
 {
+	const FString PreviousSelection = (bPreserveSelection && SelectedGraphOption.IsValid())
+		? *SelectedGraphOption
+		: FString(AllGraphsOption);
+
 	GraphOptions.Reset();
 	GraphOptions.Add(MakeShared<FString>(AllGraphsOption));
 
@@ -462,7 +465,16 @@ void SBPAIBridgePanel::RefreshGraphOptions()
 		}
 	}
 
+	// "All Graphs" unless the previous choice survived the rebuild.
 	SelectedGraphOption = GraphOptions[0];
+	for (const TSharedPtr<FString>& Option : GraphOptions)
+	{
+		if (Option.IsValid() && *Option == PreviousSelection)
+		{
+			SelectedGraphOption = Option;
+			break;
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------------------
@@ -526,19 +538,48 @@ bool SBPAIBridgePanel::HasDiff() const
 // Export
 // ---------------------------------------------------------------------------------------
 
+int32 SBPAIBridgePanel::FindSelectedGraphIndex() const
+{
+	// Resolved by name rather than by the combo's position: the combo is only repopulated when
+	// the Blueprint selection changes, so a graph added or removed in the editor since then
+	// would make a positional lookup point at a different graph than the one on screen.
+	if (!SelectedGraphOption.IsValid() || *SelectedGraphOption == AllGraphsOption)
+	{
+		return INDEX_NONE;
+	}
+
+	UBlueprint* Blueprint = SelectedBlueprint.Get();
+	if (Blueprint == nullptr)
+	{
+		return INDEX_NONE;
+	}
+
+	TArray<UEdGraph*> Graphs;
+	FBPExporter::CollectGraphs(Blueprint, Graphs);
+
+	for (int32 Index = 0; Index < Graphs.Num(); ++Index)
+	{
+		if (Graphs[Index] != nullptr && Graphs[Index]->GetName() == *SelectedGraphOption)
+		{
+			return Index;
+		}
+	}
+
+	return INDEX_NONE;
+}
+
 FBPExportOptions SBPAIBridgePanel::MakeExportOptions() const
 {
 	FBPExportOptions Options;
 	Options.Context = SelectedContext;
 
-	// GraphOptions[0] is "All Graphs", so entry N+1 is graph N of the Blueprint's graph list.
-	const int32 OptionIndex = SelectedGraphOption.IsValid() ? GraphOptions.IndexOfByKey(SelectedGraphOption) : 0;
-	if (OptionIndex > 0)
+	const int32 GraphIndex = FindSelectedGraphIndex();
+	if (GraphIndex != INDEX_NONE)
 	{
 		// Chunked mode indexes into the unfiltered list, which is what lets the prompt tell the
 		// AI "this is graph 3 of 7" rather than "graph 1 of 1".
 		Options.bChunkedMode = true;
-		Options.ChunkGraphIndex = OptionIndex - 1;
+		Options.ChunkGraphIndex = GraphIndex;
 	}
 
 	return Options;
@@ -792,6 +833,15 @@ FReply SBPAIBridgePanel::OnApplyChangesClicked()
 	{
 		ClearDiff();
 		LastExportJson.Reset();
+
+		// An import can add a function graph, so the scope combo needs rebuilding -- keeping
+		// the user's choice, since the auto-format below reads it.
+		RefreshGraphOptions(/*bPreserveSelection*/ true);
+		if (GraphCombo.IsValid())
+		{
+			GraphCombo->RefreshOptions();
+			GraphCombo->SetSelectedItem(SelectedGraphOption);
+		}
 
 		const UBPAIBridgeSettings* Settings = GetDefault<UBPAIBridgeSettings>();
 		if (Settings != nullptr && Settings->bAutoFormatAfterApply)

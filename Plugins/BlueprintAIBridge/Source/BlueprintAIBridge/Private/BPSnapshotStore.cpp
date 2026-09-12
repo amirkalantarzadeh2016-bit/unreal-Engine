@@ -53,10 +53,16 @@ FString FBPSnapshotStore::SaveSnapshot(const FString& AssetPath, const FString& 
 		return FString();
 	}
 
+	// Millisecond granularity, not seconds: an export immediately followed by a format would
+	// otherwise land on the same filename and the first snapshot would be lost. The stamp stays
+	// a plain integer so GetSnapshotsForAsset can keep sorting on it numerically.
+	const FDateTime Now = FDateTime::UtcNow();
+	const int64 Stamp = Now.ToUnixTimestamp() * 1000 + Now.GetMillisecond();
+
 	const FString FileName = FString::Printf(
 		TEXT("%s_%lld.json"),
 		*AssetPathToSafeFilename(AssetPath),
-		FDateTime::UtcNow().ToUnixTimestamp());
+		Stamp);
 
 	const FString FullPath = Directory / FileName;
 

@@ -107,7 +107,6 @@ private:
 	static void OrderWithinLayers(
 		const TArray<UEdGraphNode*>& Nodes,
 		const TMap<UEdGraphNode*, int32>& NodeToIndex,
-		const TArray<int32>& Layers,
 		TArray<TArray<int32>>& InOutLayerContents);
 
 	/** Writes NodePosX/Y for one cluster and returns the cluster's new bounding box. */

@@ -18,8 +18,19 @@ struct FBPGraphCluster
 
 	EBPClusterType Type = EBPClusterType::Logic;
 
-	/** Bounding box of Nodes. Filled in by the layout engine; empty until then. */
+	/** Bounding box of Nodes. Set by the detector, then overwritten by the layout engine. */
 	FBox2D Bounds = FBox2D(ForceInit);
+
+	/**
+	 * Where the cluster sat before the layout engine touched it.
+	 *
+	 * This is how the annotator recognises the comment box it drew on a previous run: the box
+	 * has not moved (comment nodes are excluded from layout), so it still overlaps the region
+	 * the cluster used to occupy. Position-independent identity via the nodes a comment
+	 * encloses would be neater, but the editor recomputes that set on every move, so it is not
+	 * something the formatter can rely on between runs.
+	 */
+	FBox2D PreLayoutBounds = FBox2D(ForceInit);
 
 	/**
 	 * Comment box drawn around this cluster, if any. The annotator writes it so a second run

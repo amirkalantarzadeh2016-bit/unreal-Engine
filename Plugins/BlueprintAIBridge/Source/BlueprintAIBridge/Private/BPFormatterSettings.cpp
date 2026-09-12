@@ -30,7 +30,9 @@ FName UBPAIBridgeSettings::GetCategoryName() const
 
 FName UBPAIBridgeSettings::GetSectionName() const
 {
-	return TEXT("Blueprint Formatter");
+	// Identifier, not a label. The text shown in the settings tree comes from the class's
+	// DisplayName meta via UDeveloperSettings::GetSectionText.
+	return TEXT("BlueprintFormatter");
 }
 
 FLinearColor UBPAIBridgeSettings::GetClusterColor(EBPClusterType ClusterType) const
