@@ -97,6 +97,12 @@ namespace ArchSkyDirectorConstants
 // Construction
 // ---------------------------------------------------------------------------------------
 
+UArchSkyDirectorRootComponent::UArchSkyDirectorRootComponent()
+{
+	PrimaryComponentTick.bCanEverTick = false;
+	bWantsOnUpdateTransform = false;
+}
+
 AArchSkyDirector::AArchSkyDirector()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -121,7 +127,7 @@ AArchSkyDirector::AArchSkyDirector()
 		ArchSkyDirectorConstants::SetNetUpdateFrequencyCompat(*this, UpdateHz);
 	}
 
-	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
+	SceneRoot = CreateDefaultSubobject<UArchSkyDirectorRootComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
 
 	SunLightComponent = CreateDefaultSubobject<UDirectionalLightComponent>(TEXT("SunLight"));

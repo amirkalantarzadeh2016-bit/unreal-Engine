@@ -102,6 +102,7 @@ void UArchSkyPlaybackSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 	PreviousSimTime = GetCurrentSimTime();
 	bHasPreviousSimTime = true;
+	RecordSimDate();
 	bInitialised = true;
 
 	UE_LOG(LogArchSky, Log,
@@ -239,6 +240,7 @@ void UArchSkyPlaybackSubsystem::Tick(float DeltaTime)
 	// compares against where we actually are rather than where we were about to be.
 	PreviousSimTime = GetCurrentSimTime();
 	bHasPreviousSimTime = true;
+	RecordSimDate();
 
 	(void)bMoved;
 }
@@ -274,6 +276,36 @@ void UArchSkyPlaybackSubsystem::ReconcileExternalSpeedChange()
 	}
 }
 
+void UArchSkyPlaybackSubsystem::RecordSimDate()
+{
+	if (const UArchSkySubsystem* Sky = GetSkySubsystem())
+	{
+		const FArchSkyState State = Sky->GetSkyState();
+		PreviousSimDayOfYear = State.DayOfYear;
+		PreviousSimYear = State.Year;
+	}
+}
+
+void UArchSkyPlaybackSubsystem::RestorePreviousSimDate()
+{
+	UArchSkySubsystem* Sky = GetSkySubsystem();
+	if (!Sky)
+	{
+		return;
+	}
+
+	const FArchSkyState State = Sky->GetSkyState();
+	if (State.DayOfYear == PreviousSimDayOfYear && State.Year == PreviousSimYear)
+	{
+		return;
+	}
+
+	int32 Month = 1;
+	int32 Day = 1;
+	ArchTimeCalendar::DayOfYearToMonthDay(PreviousSimYear, PreviousSimDayOfYear, Month, Day);
+	Sky->SetDateFromGregorian(PreviousSimYear, Month, Day);
+}
+
 bool UArchSkyPlaybackSubsystem::EnforceLoopBoundary()
 {
 	const float Current = GetCurrentSimTime();
@@ -299,6 +331,21 @@ bool UArchSkyPlaybackSubsystem::EnforceLoopBoundary()
 
 	if (bLoopEnabled)
 	{
+		// A window ending at midnight crosses it, and the clock rolls the date as it
+		// should. "Loop this day" means one day, though, so put the date back. Detected by
+		// the clock having moved backwards, which while running forwards can only be a wrap.
+		const bool bWrappedMidnight = bRunningForward
+			? (Current < PreviousSimTime)
+			: (Current > PreviousSimTime);
+
+		if (bWrappedMidnight)
+		{
+			// NOTE: the clock's own OnDayRolled will already have fired for the roll we are
+			// undoing. That is harmless - a day genuinely did pass - and suppressing it
+			// would mean reaching into the clock's event logic from out here.
+			RestorePreviousSimDate();
+		}
+
 		// Reset to the far end of the window, as specified. The overshoot - at most one
 		// frame's worth - is discarded rather than carried over, which keeps every lap
 		// starting at exactly the same instant and therefore keeps a looped shadow study
@@ -363,6 +410,7 @@ void UArchSkyPlaybackSubsystem::Play()
 	LoopCount = 0;
 	PreviousSimTime = GetCurrentSimTime();
 	bHasPreviousSimTime = true;
+	RecordSimDate();
 
 	LastPushedFlowRate = SpeedMultiplierToFlowRate(SpeedMultiplier);
 	Sky->SetTimeFlowRate(LastPushedFlowRate);
@@ -447,6 +495,7 @@ void UArchSkyPlaybackSubsystem::SetCurrentSimTime(float NewSimTimeMinutes)
 	// Seeking must not look like a loop wrap on the next tick.
 	PreviousSimTime = GetCurrentSimTime();
 	bHasPreviousSimTime = true;
+	RecordSimDate();
 }
 
 float UArchSkyPlaybackSubsystem::GetCurrentSimTimeNormalised() const

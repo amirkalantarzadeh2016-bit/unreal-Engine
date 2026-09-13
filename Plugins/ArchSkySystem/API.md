@@ -72,6 +72,14 @@ place to read them from.
 | Function | Returns | Notes |
 |---|---|---|
 | `GetSkyState` | `FArchSkyState` | The authoritative state. |
+
+> These return **by value**, not by const reference. A const-reference return from a
+> `UFUNCTION` is accepted by some engine versions and rejected by others, and a plugin
+> claiming 5.4+ compatibility cannot gamble a build failure on which one you have. The
+> copies are 80–200 bytes taken a few times per frame. C++ callers can still write
+> `const auto& X = Subsystem->GetSkyState();` — lifetime extension makes that correct and
+> free of a second copy.
+
 | `GetSolarPosition` | `FArchSolarPosition` | Azimuth, altitude (apparent **and** geometric), declination, equation of time, hour angle, refraction. |
 | `GetLunarPosition` | `FArchLunarPosition` | Includes illuminated fraction, phase, age, distance and bright-limb angle. |
 | `GetSolarDayInfo` | `FArchSolarDayInfo` | Sunrise, sunset, solar noon, day length, civil twilight, max altitude, polar-day/night flags. |
@@ -86,6 +94,7 @@ place to read them from.
 | `GetCurrentWeatherBlended` | `FArchWeatherParams` | With any running transition applied. |
 | `GetAvailableWeatherPresetIds` | `TArray<FName>` | Built-ins then asset-only presets. |
 | `GetWeatherPresetDisplayName` | `FText` | Falls back to the id for built-ins. |
+| `GetWeatherPresetThumbnail` | `TSoftObjectPtr<UTexture2D>` | Null for built-ins. Soft, so listing the library loads no textures. |
 | `GetAvailableLocations` | `TArray<FArchLocationEntry>` | Asset entries override built-ins in place. |
 | `IsWeatherTransitionActive` | `bool` | |
 | `GetWeatherTransitionRemainingSeconds` | `float` | |
@@ -264,7 +273,13 @@ callers need no networking code.
 `LoopEnd`, `LoopStart01`, `LoopEnd01`, `LoopRangeText`, `StepSize`, `StepSizeText`.
 
 **Lists:** `GetWeatherTiles`, `GetLocationOptions(Search)`, `GetSavedPresets`,
-`GetMonthNames`, `GetCurrentDateParts`, `GetTimeSliderTicks`.
+`GetMonthNames`, `GetCurrentDateParts`, `GetTimeSliderTicks`, `GetSpeedPresetOptions`.
+
+**Refresh control:** `FormattedRefreshInterval` (default `0.1 s`) throttles how often the
+`FText` fields are rebuilt while the clock runs; numeric fields always update every change,
+and a change made while paused is never throttled. `FormattedRevision` increments only when
+the text actually changed — compare against it before calling `SetText`, because
+`UTextBlock::SetText` invalidates layout unconditionally.
 
 `GetTimeSliderTicks` returns normalised 0…1 positions for the sunrise, solar-noon and
 sunset tick marks, plus a `bValid` flag that is false on a polar day — so a slider can

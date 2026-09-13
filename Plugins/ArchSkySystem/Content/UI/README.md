@@ -19,12 +19,18 @@ version.
 | `WBP_ArchPresetRow` | `UserWidget` | One saved-preset row |
 | `WBP_ArchCompassDial` | `UserWidget` | The north-offset dial with its compass rose |
 
-## The one rule
+## Two rules
 
-Bind to `ViewModel` fields **inside the `On Sky View Updated` event**, never through UMG
-property bindings. A property binding is evaluated every frame, for every bound widget;
+**1.** Bind to `ViewModel` fields **inside the `On Sky View Updated` event**, never through
+UMG property bindings. A property binding is evaluated every frame, for every bound widget;
 the event fires only when something actually changed. This is the entire reason the MVVM
 layer exists — using property bindings would throw the benefit away.
+
+**2.** If your own widgets call `SetText`, guard them on `ViewModel.FormattedRevision`
+changing since you last applied it. The event fires every frame while the clock runs (so
+sliders track smoothly) but the text is only rebuilt at 10 Hz, and `SetText` invalidates
+Slate layout whether or not the text differs. The C++ base already does this for its own
+bound labels.
 
 ## Optional bindings
 

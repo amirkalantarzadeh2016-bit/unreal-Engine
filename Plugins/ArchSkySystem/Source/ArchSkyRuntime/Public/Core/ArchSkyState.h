@@ -113,9 +113,18 @@ struct ARCHSKYRUNTIME_API FArchSkyReplicatedState
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|Networking")
 	uint16 Year = 2026;
 
-	/** Simulated hours per real second, quantised to 1/100. Lets clients predict forward. */
+	/**
+	 * Simulated hours per real second, quantised to 1/100. Lets clients predict forward.
+	 *
+	 * ARCH NOTE: int32, not int16. The clock permits +/-600 h/s, which at a scale of 100 is
+	 * +/-60000 - nearly double what an int16 can hold, so the fastest playback speeds would
+	 * silently saturate at 327.67 h/s and every client would predict the sun in the wrong
+	 * place. Dropping the scale to 1/10 would fit, but then the default real-time rate of
+	 * 0.0167 h/s would quantise to zero and time would appear frozen on clients. Two extra
+	 * bytes at 2 Hz is the obviously correct trade.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|Networking")
-	int16 QuantisedTimeFlowRate = 0;
+	int32 QuantisedTimeFlowRate = 0;
 
 	/** Weather blend alpha quantised to 1/255. */
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|Networking")

@@ -340,6 +340,12 @@ private:
 	/** Enforces the loop window. Returns true when the clock was moved. */
 	bool EnforceLoopBoundary();
 
+	/** Records the simulated date, for the loop's date-holding behaviour. */
+	void RecordSimDate();
+
+	/** Puts the date back to the previous tick's, undoing a roll caused by a loop wrap. */
+	void RestorePreviousSimDate();
+
 	/** Picks up a flow-rate change made by something other than this transport. */
 	void ReconcileExternalSpeedChange();
 
@@ -366,6 +372,17 @@ private:
 	/** CurrentSimTime at the end of the previous tick, for wrap detection. */
 	float PreviousSimTime = 0.f;
 	bool bHasPreviousSimTime = false;
+
+	/**
+	 * The simulated DATE at the end of the previous tick.
+	 *
+	 * A loop whose window ends at midnight crosses it, and the clock underneath rolls the
+	 * date as it is supposed to. But "loop this day" means one day, so on a wrap we put the
+	 * date back to what it was a frame ago - which is exact, and handles a year boundary
+	 * without any arithmetic of our own.
+	 */
+	int32 PreviousSimDayOfYear = 1;
+	int32 PreviousSimYear = 2026;
 
 	/** Scrub state. */
 	bool bIsScrubbing = false;

@@ -77,9 +77,10 @@ FArchSkyReplicatedState FArchSkyReplicatedState::FromSkyState(const FArchSkyStat
 	Replicated.DayOfYear = static_cast<uint16>(FMath::Clamp(State.DayOfYear, 1, 366));
 	Replicated.Year = static_cast<uint16>(FMath::Clamp(State.Year, 1900, 2200));
 
-	Replicated.QuantisedTimeFlowRate = static_cast<int16>(FMath::Clamp(
-		FMath::RoundToInt(State.TimeFlowRate * FlowRateQuantisationScale),
-		static_cast<int32>(MIN_int16), static_cast<int32>(MAX_int16)));
+	// The clock clamps its own rate to +/-600 h/s, so +/-60000 is the full legal range here
+	// and no further clamping can lose a value a caller could actually have set.
+	Replicated.QuantisedTimeFlowRate = FMath::RoundToInt(
+		FMath::Clamp(State.TimeFlowRate, -600.f, 600.f) * FlowRateQuantisationScale);
 
 	Replicated.QuantisedWeatherAlpha = static_cast<uint8>(FMath::Clamp(
 		FMath::RoundToInt(State.WeatherBlendAlpha * 255.f), 0, 255));

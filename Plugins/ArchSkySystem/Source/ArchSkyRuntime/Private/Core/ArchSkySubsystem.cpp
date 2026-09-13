@@ -1039,6 +1039,21 @@ FText UArchSkySubsystem::GetWeatherPresetDisplayName(FName PresetId) const
 	return FText::FromName(PresetId);
 }
 
+TSoftObjectPtr<UTexture2D> UArchSkySubsystem::GetWeatherPresetThumbnail(FName PresetId) const
+{
+	if (const TObjectPtr<UArchWeatherPreset>* Found = WeatherPresetAssets.Find(PresetId))
+	{
+		if (IsValid(*Found))
+		{
+			return (*Found)->Thumbnail;
+		}
+	}
+
+	// Built-in presets have no asset and therefore no thumbnail. The tile falls back to its
+	// label, which is why DisplayName is never allowed to be empty.
+	return nullptr;
+}
+
 TArray<FArchLocationEntry> UArchSkySubsystem::GetAvailableLocations() const
 {
 	TArray<FArchLocationEntry> Locations = UArchLocationLibrary::GetBuiltInLocations();

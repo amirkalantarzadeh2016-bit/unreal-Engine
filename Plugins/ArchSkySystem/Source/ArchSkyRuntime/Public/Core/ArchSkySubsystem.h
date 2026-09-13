@@ -189,21 +189,31 @@ public:
 	// Getters
 	// -----------------------------------------------------------------------------------
 
-	/** The authoritative state. */
+	/**
+	 * The authoritative state.
+	 *
+	 * ARCH NOTE: this and the four getters below return BY VALUE rather than by const
+	 * reference. A const-reference return from a UFUNCTION is accepted by some engine
+	 * versions and rejected by others, and a plugin that claims 5.4+ compatibility cannot
+	 * gamble a total build failure on which one the user has. The copies are 80-200 bytes,
+	 * taken a handful of times per frame, against a Director tick whose expensive branch is
+	 * a cubemap render - the cost is not measurable. C++ callers can still bind the result
+	 * to a `const&`; lifetime extension makes that correct and free of an extra copy.
+	 */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|State")
-	const FArchSkyState& GetSkyState() const { return SkyState; }
+	FArchSkyState GetSkyState() const { return SkyState; }
 
 	/** Current solar position. Cached; recomputed only when the state actually changed. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|State")
-	const FArchSolarPosition& GetSolarPosition() const { return CachedSolarPosition; }
+	FArchSolarPosition GetSolarPosition() const { return CachedSolarPosition; }
 
 	/** Current lunar position. Cached alongside the solar position. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|State")
-	const FArchLunarPosition& GetLunarPosition() const { return CachedLunarPosition; }
+	FArchLunarPosition GetLunarPosition() const { return CachedLunarPosition; }
 
 	/** Sunrise / sunset / twilight for the current date and location. Cached per day. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|State")
-	const FArchSolarDayInfo& GetSolarDayInfo() const { return CachedSolarDayInfo; }
+	FArchSolarDayInfo GetSolarDayInfo() const { return CachedSolarDayInfo; }
 
 	/** Local clock string, e.g. "06:42" or "6:42 AM". */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|Format")
@@ -243,7 +253,7 @@ public:
 
 	/** The weather parameters in force right now, with any running transition applied. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|Weather")
-	const FArchWeatherParams& GetCurrentWeatherBlended() const { return CachedWeatherParams; }
+	FArchWeatherParams GetCurrentWeatherBlended() const { return CachedWeatherParams; }
 
 	/** Every weather preset id available, assets and built-ins merged, in display order. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|Weather")
@@ -252,6 +262,14 @@ public:
 	/** Localised display name for a weather preset id. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|Weather")
 	FText GetWeatherPresetDisplayName(FName PresetId) const;
+
+	/**
+	 * Tile thumbnail for a weather preset, or null when the preset is a built-in or has no
+	 * thumbnail assigned. Soft, so listing the whole weather library loads no textures -
+	 * the widget resolves only the ones it actually draws.
+	 */
+	UFUNCTION(BlueprintPure, Category = "ArchSky|Weather")
+	TSoftObjectPtr<UTexture2D> GetWeatherPresetThumbnail(FName PresetId) const;
 
 	/** Every city available, assets and built-ins merged. */
 	UFUNCTION(BlueprintPure, Category = "ArchSky|Location")

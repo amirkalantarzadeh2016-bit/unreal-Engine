@@ -51,6 +51,8 @@ void UArchSkyWidgetBase::NativeOnInitialized()
 	if (TimeOfDaySlider)
 	{
 		TimeOfDaySlider->OnValueChanged.AddDynamic(this, &UArchSkyWidgetBase::HandleTimeSliderChanged);
+		TimeOfDaySlider->OnMouseCaptureBegin.AddDynamic(this, &UArchSkyWidgetBase::HandleTimeSliderCaptureBegin);
+		TimeOfDaySlider->OnMouseCaptureEnd.AddDynamic(this, &UArchSkyWidgetBase::HandleGenericSliderCaptureEnd);
 		TimeOfDaySlider->SetToolTipText(LOCTEXT("TimeSliderTooltip",
 			"Time of day. Drag to scrub the sun across the sky; tick marks show sunrise, solar noon and sunset."));
 	}
@@ -58,6 +60,8 @@ void UArchSkyWidgetBase::NativeOnInitialized()
 	if (DayOfYearSlider)
 	{
 		DayOfYearSlider->OnValueChanged.AddDynamic(this, &UArchSkyWidgetBase::HandleDaySliderChanged);
+		DayOfYearSlider->OnMouseCaptureBegin.AddDynamic(this, &UArchSkyWidgetBase::HandleDaySliderCaptureBegin);
+		DayOfYearSlider->OnMouseCaptureEnd.AddDynamic(this, &UArchSkyWidgetBase::HandleGenericSliderCaptureEnd);
 		DayOfYearSlider->SetToolTipText(LOCTEXT("DaySliderTooltip",
 			"Day of the year. Drag to move through the seasons and watch the sun's arc change height."));
 	}
@@ -65,6 +69,8 @@ void UArchSkyWidgetBase::NativeOnInitialized()
 	if (NorthOffsetDial)
 	{
 		NorthOffsetDial->OnValueChanged.AddDynamic(this, &UArchSkyWidgetBase::HandleNorthDialChanged);
+		NorthOffsetDial->OnMouseCaptureBegin.AddDynamic(this, &UArchSkyWidgetBase::HandleNorthDialCaptureBegin);
+		NorthOffsetDial->OnMouseCaptureEnd.AddDynamic(this, &UArchSkyWidgetBase::HandleGenericSliderCaptureEnd);
 		NorthOffsetDial->SetToolTipText(LOCTEXT("NorthDialTooltip",
 			"Rotation of true north relative to the floor plan. Set this to match the site plan's north arrow - "
 			"shadow studies are wrong until it is correct."));
@@ -200,14 +206,20 @@ void UArchSkyWidgetBase::NativeDestruct()
 	if (TimeOfDaySlider)
 	{
 		TimeOfDaySlider->OnValueChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleTimeSliderChanged);
+		TimeOfDaySlider->OnMouseCaptureBegin.RemoveDynamic(this, &UArchSkyWidgetBase::HandleTimeSliderCaptureBegin);
+		TimeOfDaySlider->OnMouseCaptureEnd.RemoveDynamic(this, &UArchSkyWidgetBase::HandleGenericSliderCaptureEnd);
 	}
 	if (DayOfYearSlider)
 	{
 		DayOfYearSlider->OnValueChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleDaySliderChanged);
+		DayOfYearSlider->OnMouseCaptureBegin.RemoveDynamic(this, &UArchSkyWidgetBase::HandleDaySliderCaptureBegin);
+		DayOfYearSlider->OnMouseCaptureEnd.RemoveDynamic(this, &UArchSkyWidgetBase::HandleGenericSliderCaptureEnd);
 	}
 	if (NorthOffsetDial)
 	{
 		NorthOffsetDial->OnValueChanged.RemoveDynamic(this, &UArchSkyWidgetBase::HandleNorthDialChanged);
+		NorthOffsetDial->OnMouseCaptureBegin.RemoveDynamic(this, &UArchSkyWidgetBase::HandleNorthDialCaptureBegin);
+		NorthOffsetDial->OnMouseCaptureEnd.RemoveDynamic(this, &UArchSkyWidgetBase::HandleGenericSliderCaptureEnd);
 	}
 	if (PlayPauseButton)
 	{
@@ -475,10 +487,35 @@ void UArchSkyWidgetBase::HandleTimelineSliderChanged(float Value)
 
 void UArchSkyWidgetBase::HandleTimelineCaptureBegin()
 {
+	DraggedSlider = TimelineSlider;
+
 	if (ViewModel)
 	{
 		ViewModel->CommandBeginScrub();
 	}
+}
+
+void UArchSkyWidgetBase::HandleTimeSliderCaptureBegin()
+{
+	DraggedSlider = TimeOfDaySlider;
+}
+
+void UArchSkyWidgetBase::HandleDaySliderCaptureBegin()
+{
+	DraggedSlider = DayOfYearSlider;
+}
+
+void UArchSkyWidgetBase::HandleNorthDialCaptureBegin()
+{
+	DraggedSlider = NorthOffsetDial;
+}
+
+void UArchSkyWidgetBase::HandleGenericSliderCaptureEnd()
+{
+	// Push the final handle position before releasing the latch, so the last few pixels of
+	// a drag are never discarded by the throttle.
+	FlushPendingSliderPush();
+	DraggedSlider.Reset();
 }
 
 void UArchSkyWidgetBase::HandleTimelineCaptureEnd()
@@ -486,6 +523,7 @@ void UArchSkyWidgetBase::HandleTimelineCaptureEnd()
 	// Push the final handle position before resuming, so playback restarts from exactly
 	// where the user let go rather than from the last throttled sample.
 	FlushPendingSliderPush();
+	DraggedSlider.Reset();
 
 	if (ViewModel)
 	{
@@ -571,78 +609,89 @@ void UArchSkyWidgetBase::HandleViewModelUpdated()
 	// into the subsystem and fight the user's drag. Suppress for the duration.
 	TGuardValue<bool> SuppressGuard(bSuppressSliderCallbacks, true);
 
-	if (TimeOfDaySlider)
+	// ...and never write back at all to the handle the user currently has hold of. The
+	// throttle means our value can lag theirs by a frame, which reads as the handle
+	// snapping backwards under the pointer.
+	const USlider* Dragged = DraggedSlider.Get();
+
+	if (TimeOfDaySlider && TimeOfDaySlider.Get() != Dragged)
 	{
 		TimeOfDaySlider->SetValue(ViewModel->TimeOfDayHours / 24.f);
 	}
 
-	if (DayOfYearSlider)
+	if (DayOfYearSlider && DayOfYearSlider.Get() != Dragged)
 	{
 		DayOfYearSlider->SetValue(static_cast<float>(ViewModel->DayOfYear - 1) / 365.f);
 	}
 
-	if (NorthOffsetDial)
+	if (NorthOffsetDial && NorthOffsetDial.Get() != Dragged)
 	{
 		NorthOffsetDial->SetValue(ViewModel->NorthOffsetDegrees / 360.f);
 	}
 
-	if (TimelineSlider)
+	if (TimelineSlider && TimelineSlider.Get() != Dragged)
 	{
 		TimelineSlider->SetValue(ViewModel->CurrentSimTime);
 	}
 
-	if (TimeLabel)
-	{
-		TimeLabel->SetText(ViewModel->TimeText);
-	}
-
-	if (PlaybackTimeLabel)
-	{
-		PlaybackTimeLabel->SetText(ViewModel->PlaybackTimeText);
-	}
-
-	if (PlaybackDateLabel)
-	{
-		PlaybackDateLabel->SetText(ViewModel->PlaybackDateText);
-	}
-
-	if (SpeedPresetLabel)
-	{
-		SpeedPresetLabel->SetText(ViewModel->SpeedPresetText);
-	}
-
+	// The check box is cheap and cannot be mid-drag; SetIsChecked does not raise its event.
 	if (LoopToggle)
 	{
-		// SetIsChecked does not raise OnCheckStateChanged, so this cannot echo back.
 		LoopToggle->SetIsChecked(ViewModel->bLoopEnabled);
 	}
 
-	if (DateLabel)
+	// --- Text. Skipped entirely unless the ViewModel actually reformatted something. ---
+	if (ViewModel->FormattedRevision != LastAppliedFormattedRevision)
 	{
-		DateLabel->SetText(ViewModel->DateText);
-	}
+		LastAppliedFormattedRevision = ViewModel->FormattedRevision;
 
-	if (SunTimesLabel)
-	{
-		FFormatNamedArguments Args;
-		Args.Add(TEXT("Sunrise"), ViewModel->SunriseText);
-		Args.Add(TEXT("Sunset"), ViewModel->SunsetText);
-		Args.Add(TEXT("DayLength"), ViewModel->DayLengthText);
+		if (TimeLabel)
+		{
+			TimeLabel->SetText(ViewModel->TimeText);
+		}
 
-		SunTimesLabel->SetText(FText::Format(
-			LOCTEXT("SunTimesFormat", "Sunrise {Sunrise}  /  Sunset {Sunset}  /  Day length {DayLength}"), Args));
-	}
+		if (DateLabel)
+		{
+			DateLabel->SetText(ViewModel->DateText);
+		}
 
-	if (AnalysisLabel)
-	{
-		FFormatNamedArguments Args;
-		Args.Add(TEXT("Azimuth"), ViewModel->SunAzimuthText);
-		Args.Add(TEXT("Altitude"), ViewModel->SunAltitudeText);
-		Args.Add(TEXT("Shadow"), ViewModel->ShadowLengthText);
-		Args.Add(TEXT("Phase"), ViewModel->TimePhaseText);
+		if (PlaybackTimeLabel)
+		{
+			PlaybackTimeLabel->SetText(ViewModel->PlaybackTimeText);
+		}
 
-		AnalysisLabel->SetText(FText::Format(
-			LOCTEXT("AnalysisFormat", "Azimuth {Azimuth}  /  Altitude {Altitude}  /  Shadow {Shadow}  /  {Phase}"), Args));
+		if (PlaybackDateLabel)
+		{
+			PlaybackDateLabel->SetText(ViewModel->PlaybackDateText);
+		}
+
+		if (SpeedPresetLabel)
+		{
+			SpeedPresetLabel->SetText(ViewModel->SpeedPresetText);
+		}
+
+		if (SunTimesLabel)
+		{
+			FFormatNamedArguments Args;
+			Args.Add(TEXT("Sunrise"), ViewModel->SunriseText);
+			Args.Add(TEXT("Sunset"), ViewModel->SunsetText);
+			Args.Add(TEXT("DayLength"), ViewModel->DayLengthText);
+
+			SunTimesLabel->SetText(FText::Format(
+				LOCTEXT("SunTimesFormat", "Sunrise {Sunrise}  /  Sunset {Sunset}  /  Day length {DayLength}"), Args));
+		}
+
+		if (AnalysisLabel)
+		{
+			FFormatNamedArguments Args;
+			Args.Add(TEXT("Azimuth"), ViewModel->SunAzimuthText);
+			Args.Add(TEXT("Altitude"), ViewModel->SunAltitudeText);
+			Args.Add(TEXT("Shadow"), ViewModel->ShadowLengthText);
+			Args.Add(TEXT("Phase"), ViewModel->TimePhaseText);
+
+			AnalysisLabel->SetText(FText::Format(
+				LOCTEXT("AnalysisFormat", "Azimuth {Azimuth}  /  Altitude {Altitude}  /  Shadow {Shadow}  /  {Phase}"), Args));
+		}
 	}
 
 	BP_OnSkyViewUpdated();

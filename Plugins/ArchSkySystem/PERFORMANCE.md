@@ -207,6 +207,22 @@ You do not need to configure these; they are structural.
   property binding on every widget every frame, and a dozen bound text blocks doing
   `FText` formatting is easily more expensive than all of the astronomy.
 
+- **Text is rebuilt at 10 Hz, not at frame rate.** "Once per change" and "the clock
+  changes every frame" combine badly during playback: a full rebuild is around twenty
+  `FText::Format` calls, each doing a localised number format. `FormattedRefreshInterval`
+  (default `0.1 s`) throttles the text while numeric fields — slider positions, the
+  play/pause flag — still update every frame. A change made while the clock is **paused**
+  is never throttled, so a scrub or a jump lands immediately. The ViewModel bumps
+  `FormattedRevision` only when it actually reformats, and `UArchSkyWidgetBase` skips its
+  whole `SetText` block when that has not moved — `UTextBlock::SetText` invalidates layout
+  unconditionally, so pushing an identical `FText` every frame costs a full Slate prepass
+  for nothing.
+
+- **The city name is resolved once, not per frame.** Matching the current coordinates
+  against the location library builds a sixteen-entry array of `FText`-bearing structs.
+  It is cached against the coordinates it was resolved for, so it runs when the site
+  changes and never otherwise.
+
 ---
 
 ## When a shadow study is the deliverable

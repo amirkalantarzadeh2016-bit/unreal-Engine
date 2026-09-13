@@ -7,6 +7,7 @@
 #include "Curves/CurveFloat.h"
 #include "Data/ArchSkySettings.h"
 #include "Data/ArchWeatherPreset.h"
+#include "Components/SceneComponent.h"
 #include "GameFramework/Actor.h"
 #include "Math/ArchMoonMath.h"
 #include "Math/ArchSolarMath.h"
@@ -51,6 +52,27 @@ enum class EArchSkyDirtyFlags : uint32
 };
 
 ENUM_CLASS_FLAGS(EArchSkyDirtyFlags);
+
+/**
+ * The Director's root.
+ *
+ * ARCH NOTE: this exists purely so the editor's sun-path visualiser has a component class
+ * of its own to register against. FComponentVisualizers are keyed by class NAME, one
+ * visualiser per key - so registering ours against plain USceneComponent would silently
+ * replace any visualiser another plugin had registered for it, and be replaced in turn by
+ * the next plugin to do the same. A one-line subclass costs nothing and makes the
+ * registration unambiguous.
+ *
+ * It adds no behaviour and should never need any.
+ */
+UCLASS(ClassGroup = "ArchSky", meta = (BlueprintSpawnableComponent, DisplayName = "ArchSky Director Root"))
+class ARCHSKYRUNTIME_API UArchSkyDirectorRootComponent : public USceneComponent
+{
+	GENERATED_BODY()
+
+public:
+	UArchSkyDirectorRootComponent();
+};
 
 /**
  * The one scene authority for the sky. Place exactly one per level.
@@ -106,7 +128,7 @@ public:
 
 	/** Root. Positioning the Director does not move the sky; it is a pure controller. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ArchSky|Components")
-	TObjectPtr<USceneComponent> SceneRoot;
+	TObjectPtr<UArchSkyDirectorRootComponent> SceneRoot;
 
 	/** The sun. AtmosphereSunLightIndex 0. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ArchSky|Components")

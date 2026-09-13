@@ -117,12 +117,10 @@ void FArchSkyEditorModule::RegisterVisualizer()
 		return;
 	}
 
-	// ARCH NOTE: registered against USceneComponent, not against a bespoke component class.
-	// The Director's root is a plain USceneComponent, and inventing a UArchSkyRootComponent
-	// purely to hang a visualiser off would add a class to the public API for no other
-	// reason. The visualiser's first act is to check that the owner is an AArchSkyDirector
-	// and bail otherwise, so the broad registration costs one cast per selected component.
-	RegisteredVisualizerClassName = USceneComponent::StaticClass()->GetFName();
+	// Registered against the Director's own root class rather than USceneComponent.
+	// Visualisers are keyed by class name, one per key, so a USceneComponent registration
+	// would silently replace - and be replaced by - any other plugin doing the same.
+	RegisteredVisualizerClassName = UArchSkyDirectorRootComponent::StaticClass()->GetFName();
 
 	GUnrealEd->RegisterComponentVisualizer(RegisteredVisualizerClassName, MakeShared<FArchSkyDirectorVisualizer>());
 }

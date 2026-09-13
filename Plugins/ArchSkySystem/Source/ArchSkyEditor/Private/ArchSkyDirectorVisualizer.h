@@ -26,10 +26,12 @@ class UArchSkySubsystem;
  *   - Optionally the analemma: the figure-eight the sun traces when sampled at the same
  *     clock time across a year. Off by default because it is 365 extra solar solves.
  *
- * ARCH NOTE: this is a FComponentVisualizer registered against USceneComponent rather than
- * an actor-level drawing hook, because component visualisers are the only mechanism the
- * editor gives us that draws with the correct depth priority and participates properly in
- * hit-proxy selection. The visualiser is registered for the Director's root component.
+ * ARCH NOTE: this is a FComponentVisualizer rather than an actor-level drawing hook,
+ * because component visualisers are the only mechanism the editor gives us that draws with
+ * the correct depth priority and participates properly in hit-proxy selection. It is
+ * registered against UArchSkyDirectorRootComponent - a class that exists only to give this
+ * registration a key of its own, since visualisers are keyed by class name and registering
+ * against plain USceneComponent would collide with any other plugin doing the same.
  */
 class FArchSkyDirectorVisualizer : public FComponentVisualizer
 {

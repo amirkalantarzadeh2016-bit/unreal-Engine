@@ -468,6 +468,35 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "ArchSky|UI")
 	FString PresetSlotName;
 
+	/**
+	 * Minimum seconds between two rebuilds of the FORMATTED (FText) fields while the clock
+	 * is running. Numeric fields - slider positions, flags - always update every change.
+	 *
+	 * ARCH NOTE: this exists because "format once per change" and "the clock changes every
+	 * frame" combine badly. Playback at 60 fps means 60 changes a second, and a full
+	 * rebuild is roughly twenty FText::Format calls plus a localised number format each -
+	 * easily more expensive than the entire astronomy layer it is reporting on. Nobody can
+	 * read a clock updating faster than about 10 Hz, so the text is rebuilt at 10 Hz and
+	 * the sliders still track at frame rate.
+	 *
+	 * A change made while the clock is PAUSED always rebuilds immediately, whatever this
+	 * value is, so the panel is never left showing a stale number after a scrub or a jump.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ArchSky|UI|Performance",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "0.5", Units = "Seconds"))
+	float FormattedRefreshInterval = 0.1f;
+
+	/**
+	 * Incremented every time the formatted fields are actually rebuilt.
+	 *
+	 * A widget should compare this against the value it last applied and skip its
+	 * SetText calls when it has not moved: UTextBlock::SetText invalidates layout
+	 * unconditionally, so pushing an identical FText every frame costs a full Slate
+	 * prepass for no visible change.
+	 */
+	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|UI")
+	int32 FormattedRevision = 0;
+
 private:
 	/** Bound to UArchSkySubsystem::OnSkyStateChanged. */
 	UFUNCTION()
@@ -481,8 +510,22 @@ private:
 	UFUNCTION()
 	void HandleWeatherTransition(FName FromPresetId, FName ToPresetId);
 
-	/** Recomputes every presentation field and raises OnViewModelUpdated. */
-	void RefreshAllFields();
+	/**
+	 * Recomputes the presentation fields and raises OnViewModelUpdated.
+	 *
+	 * @param bForceFormatted  Rebuild the FText fields regardless of the throttle. Set for
+	 *                         anything that is not the clock simply advancing.
+	 */
+	void RefreshAllFields(bool bForceFormatted = true);
+
+	/** The cheap half: raw numbers and flags the sliders and icons bind to. */
+	void RefreshNumericFields(const FArchSkyState& State);
+
+	/** The expensive half: every FText. Throttled while the clock is running. */
+	void RefreshFormattedFields(const FArchSkyState& State);
+
+	/** Resolves the localised city name, cached against the coordinates it was resolved for. */
+	FText ResolveLocationName(const FArchGeoLocation& Location);
 
 	/**
 	 * Routes a mutation through the server when this is a client with control rights,
@@ -517,4 +560,14 @@ private:
 
 	/** Set while a refresh is running, so a re-entrant broadcast cannot recurse. */
 	bool bRefreshing = false;
+
+	/** World time of the last formatted rebuild, for the throttle. */
+	double LastFormattedRefreshTime = -1.0;
+
+	/** Coordinates the cached city name was resolved for. */
+	double CachedLocationLatitude = TNumericLimits<double>::Max();
+	double CachedLocationLongitude = TNumericLimits<double>::Max();
+
+	/** The resolved city name, so the 16-entry library is not rebuilt every frame. */
+	FText CachedLocationName;
 };

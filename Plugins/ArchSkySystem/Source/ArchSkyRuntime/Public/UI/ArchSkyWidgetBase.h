@@ -242,6 +242,19 @@ protected:
 	void HandleTimelineCaptureEnd();
 
 	UFUNCTION()
+	void HandleTimeSliderCaptureBegin();
+
+	UFUNCTION()
+	void HandleDaySliderCaptureBegin();
+
+	UFUNCTION()
+	void HandleNorthDialCaptureBegin();
+
+	/** Shared release handler: flushes the pending push and clears the drag latch. */
+	UFUNCTION()
+	void HandleGenericSliderCaptureEnd();
+
+	UFUNCTION()
 	void HandlePlayClicked();
 
 	UFUNCTION()
@@ -286,4 +299,24 @@ private:
 
 	/** Set while HandleViewModelUpdated writes slider values, so we do not echo them back. */
 	bool bSuppressSliderCallbacks = false;
+
+	/**
+	 * The slider the user currently has hold of, if any.
+	 *
+	 * Write-back is skipped for it. Without this the panel fights the pointer: the user
+	 * drags to a new value, the throttle holds the push for up to a frame or two, and the
+	 * next refresh writes the simulation's slightly older value straight back into the
+	 * handle - so the handle visibly snaps backwards mid-drag.
+	 */
+	TWeakObjectPtr<USlider> DraggedSlider;
+
+	/**
+	 * The ViewModel's FormattedRevision at the last SetText pass.
+	 *
+	 * UTextBlock::SetText invalidates layout unconditionally, so pushing an identical FText
+	 * every frame costs a full Slate prepass for no visible change. The ViewModel only
+	 * bumps its revision when the text actually changed, so comparing against it skips the
+	 * whole block on the frames in between.
+	 */
+	int32 LastAppliedFormattedRevision = -1;
 };

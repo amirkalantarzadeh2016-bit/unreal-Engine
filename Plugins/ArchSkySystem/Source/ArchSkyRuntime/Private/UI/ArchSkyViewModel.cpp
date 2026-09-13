@@ -141,7 +141,9 @@ void UArchSkyViewModel::Shutdown()
 
 void UArchSkyViewModel::HandleSkyStateChanged(const FArchSkyState& NewState)
 {
-	RefreshAllFields();
+	// The only high-frequency source: the clock advancing. Everything else that reaches
+	// the ViewModel forces a full rebuild, so this is the one path allowed to be throttled.
+	RefreshAllFields(/*bForceFormatted*/ false);
 }
 
 void UArchSkyViewModel::HandleTimePhaseChanged(EArchTimePhase OldPhase, EArchTimePhase NewPhase)
@@ -178,7 +180,7 @@ void UArchSkyViewModel::HandlePlaybackReachedEnd()
 // Refresh
 // ---------------------------------------------------------------------------------------
 
-void UArchSkyViewModel::RefreshAllFields()
+void UArchSkyViewModel::RefreshAllFields(bool bForceFormatted)
 {
 	UArchSkySubsystem* Subsystem = SkySubsystem.Get();
 	if (!Subsystem || bRefreshing)
@@ -189,19 +191,133 @@ void UArchSkyViewModel::RefreshAllFields()
 	// A command called from inside an OnViewModelUpdated handler would otherwise recurse.
 	TGuardValue<bool> RefreshGuard(bRefreshing, true);
 
-	using namespace ArchViewModelDetail;
+	const FArchSkyState State = Subsystem->GetSkyState();
 
-	const FArchSkyState& State = Subsystem->GetSkyState();
-	const FArchSolarPosition& Sun = Subsystem->GetSolarPosition();
-	const FArchLunarPosition& Moon = Subsystem->GetLunarPosition();
-	const FArchSolarDayInfo& DayInfo = Subsystem->GetSolarDayInfo();
+	// Cheap every time: these are what a dragged slider and a play/pause icon read.
+	RefreshNumericFields(State);
 
-	// --- Time ---
+	// Expensive, and throttled - see FormattedRefreshInterval. Two things are never
+	// throttled: an explicit change (a scrub, a jump, a preset), and any change made while
+	// the clock is paused. So the panel is never left showing a stale number.
+	const UWorld* World = Subsystem->GetWorld();
+	const double Now = World ? World->GetTimeSeconds() : 0.0;
+
+	bool bDoFormatted = bForceFormatted || !bIsPlaying;
+
+	if (!bDoFormatted)
+	{
+		// An interval of zero means "no throttle", so it must rebuild every time rather
+		// than never - the inverse of what a naive `> 0` guard would do.
+		bDoFormatted = (FormattedRefreshInterval <= 0.f)
+			|| (LastFormattedRefreshTime < 0.0)
+			|| ((Now - LastFormattedRefreshTime) >= FormattedRefreshInterval);
+	}
+
+	if (bDoFormatted)
+	{
+		LastFormattedRefreshTime = Now;
+		RefreshFormattedFields(State);
+		++FormattedRevision;
+	}
+
+	OnViewModelUpdated.Broadcast();
+}
+
+void UArchSkyViewModel::RefreshNumericFields(const FArchSkyState& State)
+{
+	UArchSkySubsystem* Subsystem = SkySubsystem.Get();
+	if (!Subsystem)
+	{
+		return;
+	}
+
 	TimeOfDayHours = State.TimeOfDayHours;
 	DayOfYear = State.DayOfYear;
 	TimeFlowRate = State.TimeFlowRate;
 	bIsTimePaused = Subsystem->IsTimePaused();
+	NorthOffsetDegrees = State.NorthOffsetDegrees;
 
+	WeatherTransitionProgress = Subsystem->IsWeatherTransitionActive() ? State.WeatherBlendAlpha : 1.f;
+
+	// One fetch, not two: the getter returns by value, so calling it twice would copy the
+	// whole lunar solution twice every frame.
+	const FArchLunarPosition Moon = Subsystem->GetLunarPosition();
+	MoonIllumination01 = static_cast<float>(Moon.IlluminatedFraction);
+	MoonIconRotationDegrees = static_cast<float>(Moon.BrightLimbAngleDegrees);
+
+	// --- Playback transport ---
+	CurrentSimTime = State.TimeOfDayHours * 60.f;
+	CurrentSimTime01 = FMath::Clamp(CurrentSimTime / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
+	bIsPlaying = !bIsTimePaused;
+
+	if (const UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
+	{
+		SpeedMultiplier = Playback->GetSpeedMultiplier();
+		SpeedPreset = Playback->GetSpeedPreset();
+		bLoopEnabled = Playback->IsLoopEnabled();
+		LoopStart = Playback->GetLoopStart();
+		LoopEnd = Playback->GetLoopEnd();
+		StepSize = Playback->GetStepSize();
+	}
+	else
+	{
+		// No transport in this world: report the clock's own rate so the panel is truthful.
+		SpeedMultiplier = State.TimeFlowRate * 3600.f;
+		SpeedPreset = EArchPlaybackSpeedPreset::Custom;
+	}
+
+	LoopStart01 = FMath::Clamp(LoopStart / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
+	LoopEnd01 = FMath::Clamp(LoopEnd / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
+}
+
+FText UArchSkyViewModel::ResolveLocationName(const FArchGeoLocation& Location)
+{
+	// ARCH NOTE: GetAvailableLocations() builds and returns a sixteen-entry array of structs
+	// that each carry three FTexts. Calling it on every refresh - which, while the clock
+	// runs, is every frame - is a heap allocation and sixteen struct copies to produce a
+	// string that changes perhaps once a session. Cache it against the coordinates it was
+	// resolved for and the whole cost disappears.
+	if (FMath::IsNearlyEqual(Location.LatitudeDegrees, CachedLocationLatitude, 1.e-6)
+		&& FMath::IsNearlyEqual(Location.LongitudeDegrees, CachedLocationLongitude, 1.e-6))
+	{
+		return CachedLocationName;
+	}
+
+	CachedLocationLatitude = Location.LatitudeDegrees;
+	CachedLocationLongitude = Location.LongitudeDegrees;
+	CachedLocationName = LOCTEXT("CustomLocation", "Custom location");
+
+	if (const UArchSkySubsystem* Subsystem = SkySubsystem.Get())
+	{
+		for (const FArchLocationEntry& Entry : Subsystem->GetAvailableLocations())
+		{
+			if (FMath::IsNearlyEqual(Entry.Location.LatitudeDegrees, Location.LatitudeDegrees, 1.e-3)
+				&& FMath::IsNearlyEqual(Entry.Location.LongitudeDegrees, Location.LongitudeDegrees, 1.e-3))
+			{
+				CachedLocationName = Entry.DisplayName;
+				break;
+			}
+		}
+	}
+
+	return CachedLocationName;
+}
+
+void UArchSkyViewModel::RefreshFormattedFields(const FArchSkyState& State)
+{
+	UArchSkySubsystem* Subsystem = SkySubsystem.Get();
+	if (!Subsystem)
+	{
+		return;
+	}
+
+	using namespace ArchViewModelDetail;
+
+	const FArchSolarPosition Sun = Subsystem->GetSolarPosition();
+	const FArchLunarPosition Moon = Subsystem->GetLunarPosition();
+	const FArchSolarDayInfo DayInfo = Subsystem->GetSolarDayInfo();
+
+	// --- Time ---
 	TimeText = Subsystem->GetFormattedTimeString(bUse24HourClock);
 	DateText = Subsystem->GetFormattedDateString(CalendarType);
 
@@ -252,33 +368,19 @@ void UArchSkyViewModel::RefreshAllFields()
 		ShadowOptions.MaximumFractionalDigits = 2;
 
 		ShadowLengthText = FText::Format(
-			LOCTEXT("ShadowLengthFormat", "{0} × height"),
+			LOCTEXT("ShadowLengthFormat", "{0} x height"),
 			FText::AsNumber(Subsystem->GetShadowLengthMultiplier(), &ShadowOptions));
 	}
 
 	MoonPhaseText = ArchMoonMath::GetMoonPhaseDisplayName(Moon.Phase);
-	MoonIllumination01 = static_cast<float>(Moon.IlluminatedFraction);
 	MoonIlluminationText = FormatPercent(Moon.IlluminatedFraction);
-	MoonIconRotationDegrees = static_cast<float>(Moon.BrightLimbAngleDegrees);
 
 	// --- Location ---
 	CoordinatesText = FormatCoordinates(State.Location.LatitudeDegrees, State.Location.LongitudeDegrees);
 	TimezoneText = FormatTimezone(State.Location.TimezoneOffsetHours);
+	LocationText = ResolveLocationName(State.Location);
 
-	// Match against the library so the dropdown shows a city name rather than raw numbers.
-	LocationText = LOCTEXT("CustomLocation", "Custom location");
-	for (const FArchLocationEntry& Entry : Subsystem->GetAvailableLocations())
-	{
-		if (FMath::IsNearlyEqual(Entry.Location.LatitudeDegrees, State.Location.LatitudeDegrees, 1.e-3)
-			&& FMath::IsNearlyEqual(Entry.Location.LongitudeDegrees, State.Location.LongitudeDegrees, 1.e-3))
-		{
-			LocationText = Entry.DisplayName;
-			break;
-		}
-	}
-
-	NorthOffsetDegrees = State.NorthOffsetDegrees;
-	if (FMath::IsNearlyZero(NorthOffsetDegrees, 0.05f))
+	if (FMath::IsNearlyZero(State.NorthOffsetDegrees, 0.05f))
 	{
 		NorthOffsetText = LOCTEXT("NorthAligned", "Plan north is true north");
 	}
@@ -286,48 +388,28 @@ void UArchSkyViewModel::RefreshAllFields()
 	{
 		NorthOffsetText = FText::Format(
 			LOCTEXT("NorthOffsetFormat", "True north is {0} clockwise of plan north"),
-			FormatDegrees(NorthOffsetDegrees));
+			FormatDegrees(State.NorthOffsetDegrees));
 	}
 
 	// --- Weather ---
 	const FName ActiveWeatherId = State.WeatherPresetB.IsNone() ? State.WeatherPresetA : State.WeatherPresetB;
 	WeatherText = Subsystem->GetWeatherPresetDisplayName(ActiveWeatherId);
 
-	WeatherTransitionProgress = Subsystem->IsWeatherTransitionActive() ? State.WeatherBlendAlpha : 1.f;
-
-	// --- Playback transport ---
-	CurrentSimTime = State.TimeOfDayHours * 60.f;
-	CurrentSimTime01 = FMath::Clamp(CurrentSimTime / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
-	bIsPlaying = !Subsystem->IsTimePaused();
+	// --- Playback ---
 	PlaybackTimeText = UArchSkyPlaybackSubsystem::FormatMinutesAsClock(CurrentSimTime, bUse24HourClock);
 	PlaybackDateText = DateText;
 
 	if (const UArchSkyPlaybackSubsystem* Playback = PlaybackSubsystem.Get())
 	{
-		SpeedMultiplier = Playback->GetSpeedMultiplier();
-		SpeedPreset = Playback->GetSpeedPreset();
 		SpeedPresetText = Playback->GetCurrentSpeedDisplayName();
-
-		bLoopEnabled = Playback->IsLoopEnabled();
-		LoopStart = Playback->GetLoopStart();
-		LoopEnd = Playback->GetLoopEnd();
-		StepSize = Playback->GetStepSize();
 	}
 	else
 	{
-		// No transport in this world: report the clock's own rate so the speed label is
-		// still truthful rather than stale.
-		SpeedMultiplier = State.TimeFlowRate * 3600.f;
-		SpeedPreset = EArchPlaybackSpeedPreset::Custom;
-
 		FNumberFormattingOptions SpeedOptions;
 		SpeedOptions.MaximumFractionalDigits = 2;
 		SpeedPresetText = FText::Format(
 			LOCTEXT("SpeedFallbackFormat", "x{0}"), FText::AsNumber(SpeedMultiplier, &SpeedOptions));
 	}
-
-	LoopStart01 = FMath::Clamp(LoopStart / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
-	LoopEnd01 = FMath::Clamp(LoopEnd / UArchSkyPlaybackSubsystem::MinutesPerDay, 0.f, 1.f);
 
 	{
 		FFormatNamedArguments LoopArgs;
@@ -342,8 +424,6 @@ void UArchSkyViewModel::RefreshAllFields()
 		StepSizeText = FText::Format(
 			LOCTEXT("StepSizeFormat", "{0} min"), FText::AsNumber(StepSize, &StepOptions));
 	}
-
-	OnViewModelUpdated.Broadcast();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -907,6 +987,7 @@ TArray<FArchWeatherTileInfo> UArchSkyViewModel::GetWeatherTiles() const
 		FArchWeatherTileInfo Tile;
 		Tile.PresetId = Id;
 		Tile.DisplayName = Subsystem->GetWeatherPresetDisplayName(Id);
+		Tile.Thumbnail = Subsystem->GetWeatherPresetThumbnail(Id);
 		Tile.bIsActive = (Id == ActiveId);
 		Tiles.Add(MoveTemp(Tile));
 	}
