@@ -10,6 +10,7 @@ class UBlueprint;
 class UBPAIBridgeSettings;
 class UEdGraph;
 class UEdGraphNode;
+class UEdGraphPin;
 
 /** Log category for the graph formatter (layout, clustering and annotation). */
 BLUEPRINTAIBRIDGE_API DECLARE_LOG_CATEGORY_EXTERN(LogBPFormatter, Log, All);

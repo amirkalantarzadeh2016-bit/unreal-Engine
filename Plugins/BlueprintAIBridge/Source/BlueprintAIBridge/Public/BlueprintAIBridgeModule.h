@@ -6,7 +6,7 @@
 #include "Modules/ModuleManager.h"
 
 class SDockTab;
-struct FSpawnTabArgs;
+class FSpawnTabArgs;
 
 /** Log category shared by every class in the Blueprint AI Bridge plugin. */
 BLUEPRINTAIBRIDGE_API DECLARE_LOG_CATEGORY_EXTERN(LogBlueprintAIBridge, Log, All);
