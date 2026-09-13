@@ -34,6 +34,7 @@ public class BlueprintAIBridge : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
+				"DesktopPlatform",
 				"InputCore",
 				"Projects",
 				"PropertyEditor",

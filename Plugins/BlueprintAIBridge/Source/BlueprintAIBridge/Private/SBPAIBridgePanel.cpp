@@ -9,11 +9,16 @@
 #include "BPFormatterSettings.h"
 #include "BPGraphLayoutEngine.h"
 #include "BPSnapshotStore.h"
+#include "DesktopPlatformModule.h"
+#include "IDesktopPlatform.h"
 #include "BlueprintAIBridgeModule.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
+#include "Misc/Paths.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Framework/MultiBox/MultiBoxBuilder.h"
 #include "PropertyCustomizationHelpers.h"
 #include "Styling/AppStyle.h"
@@ -38,6 +43,32 @@ namespace SBPAIBridgePanelInternal
 	const FLinearColor StatusNeutral(0.75f, 0.75f, 0.75f);
 	const FLinearColor StatusSuccess(0.25f, 0.8f, 0.35f);
 	const FLinearColor StatusError(0.9f, 0.3f, 0.25f);
+
+	/**
+	 * Pulls the JSON object out of text that may be wrapped in prose or a markdown fence.
+	 *
+	 * A reply saved straight out of a chat window usually arrives inside ```json ... ```, and
+	 * asking someone to trim that by hand is exactly the manual step this panel is meant to
+	 * remove. Returns the input unchanged when it already starts with an object.
+	 */
+	FString ExtractJsonObject(const FString& Raw)
+	{
+		const FString Trimmed = Raw.TrimStartAndEnd();
+		if (Trimmed.StartsWith(TEXT("{")))
+		{
+			return Trimmed;
+		}
+
+		int32 FirstBrace = INDEX_NONE;
+		int32 LastBrace = INDEX_NONE;
+		if (Trimmed.FindChar(TEXT('{'), FirstBrace) && Trimmed.FindLastChar(TEXT('}'), LastBrace)
+			&& LastBrace > FirstBrace)
+		{
+			return Trimmed.Mid(FirstBrace, LastBrace - FirstBrace + 1);
+		}
+
+		return Trimmed;
+	}
 
 	/** Colour used for a diff row's +/~/- glyph. */
 	FLinearColor GlyphColor(EBPDiffType Type)
@@ -221,11 +252,28 @@ void SBPAIBridgePanel::Construct(const FArguments& InArgs)
 			+ SScrollBox::Slot()
 			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
 			[
-				SNew(SButton)
-				.HAlign(HAlign_Center)
-				.Text(LOCTEXT("AnalyzeButton", "Analyze Diff"))
-				.IsEnabled(this, &SBPAIBridgePanel::HasExport)
-				.OnClicked(this, &SBPAIBridgePanel::OnAnalyzeDiffClicked)
+				SNew(SHorizontalBox)
+
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+				[
+					SNew(SButton)
+					.HAlign(HAlign_Center)
+					.Text(LOCTEXT("LoadResponseButton", "Load JSON File..."))
+					.ToolTipText(LOCTEXT("LoadResponseTooltip", "Read an AI response from a .json file and analyse it straight away."))
+					.OnClicked(this, &SBPAIBridgePanel::OnLoadResponseFromFileClicked)
+				]
+
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.0f)
+				[
+					SNew(SButton)
+					.HAlign(HAlign_Center)
+					.Text(LOCTEXT("AnalyzeButton", "Analyze Diff"))
+					.IsEnabled(this, &SBPAIBridgePanel::HasExport)
+					.OnClicked(this, &SBPAIBridgePanel::OnAnalyzeDiffClicked)
+				]
 			]
 
 			+ SScrollBox::Slot()
@@ -662,6 +710,59 @@ void SBPAIBridgePanel::ClearDiff()
 	}
 }
 
+FReply SBPAIBridgePanel::OnLoadResponseFromFileClicked()
+{
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (DesktopPlatform == nullptr)
+	{
+		UpdateStatus(TEXT("No file browser is available on this platform; paste the response instead."), /*bIsError*/ true);
+		return FReply::Handled();
+	}
+
+	if (LastResponseDirectory.IsEmpty())
+	{
+		LastResponseDirectory = FBPSnapshotStore::GetSnapshotDirectory();
+	}
+
+	TArray<FString> SelectedFiles;
+	const bool bPicked = DesktopPlatform->OpenFileDialog(
+		FSlateApplication::Get().FindBestParentWindowHandleForDialogs(AsShared()),
+		LOCTEXT("LoadResponseTitle", "Import AI response").ToString(),
+		LastResponseDirectory,
+		FString(),
+		TEXT("JSON files (*.json)|*.json|All files (*.*)|*.*"),
+		EFileDialogFlags::None,
+		SelectedFiles);
+
+	if (!bPicked || SelectedFiles.Num() == 0)
+	{
+		return FReply::Handled();
+	}
+
+	const FString FilePath = SelectedFiles[0];
+
+	FString FileContents;
+	if (!FFileHelper::LoadFileToString(FileContents, *FilePath))
+	{
+		UpdateStatus(FString::Printf(TEXT("Could not read '%s'."), *FilePath), /*bIsError*/ true);
+		return FReply::Handled();
+	}
+
+	// Reopen where they left off rather than back at the snapshot folder every time.
+	LastResponseDirectory = FPaths::GetPath(FilePath);
+
+	if (AIResponseBox.IsValid())
+	{
+		AIResponseBox->SetText(FText::FromString(FileContents));
+	}
+
+	UpdateStatus(FString::Printf(TEXT("Loaded %s (%d characters)."), *FPaths::GetCleanFilename(FilePath), FileContents.Len()));
+
+	// Loading a response is only ever a prelude to reviewing it, so go straight there. The
+	// status line above is replaced by the diff result, or by whatever went wrong.
+	return OnAnalyzeDiffClicked();
+}
+
 FReply SBPAIBridgePanel::OnAnalyzeDiffClicked()
 {
 	if (LastExportJson.IsEmpty())
@@ -670,8 +771,9 @@ FReply SBPAIBridgePanel::OnAnalyzeDiffClicked()
 		return FReply::Handled();
 	}
 
-	const FString ResponseText = AIResponseBox.IsValid() ? AIResponseBox->GetText().ToString() : FString();
-	if (ResponseText.TrimStartAndEnd().IsEmpty())
+	const FString ResponseText = ExtractJsonObject(
+		AIResponseBox.IsValid() ? AIResponseBox->GetText().ToString() : FString());
+	if (ResponseText.IsEmpty())
 	{
 		UpdateStatus(TEXT("Paste the AI's JSON response first."), /*bIsError*/ true);
 		return FReply::Handled();

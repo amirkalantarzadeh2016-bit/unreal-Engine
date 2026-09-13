@@ -36,6 +36,9 @@ private:
 	TWeakObjectPtr<UBlueprint> SelectedBlueprint;
 	EExportContext SelectedContext = EExportContext::General;
 	FString LastExportJson;
+
+	/** Where the file browser opens next time; seeded from the snapshot directory. */
+	FString LastResponseDirectory;
 	FString LastSnapshotPath;
 	TArray<FBPDiffItem> CurrentDiff;
 	TArray<bool> DiffItemAccepted; // parallel array to CurrentDiff
@@ -91,6 +94,7 @@ private:
 	// ---- Button handlers ---------------------------------------------------------------
 	FReply OnExportClicked();
 	FReply OnCopyToClipboardClicked();
+	FReply OnLoadResponseFromFileClicked();
 	FReply OnAnalyzeDiffClicked();
 	FReply OnApplyChangesClicked();
 	FReply OnRevertSnapshotClicked();

@@ -11,7 +11,9 @@ AI's suggested changes back into the asset behind a reviewable diff.
 3. **Export for AI** writes a snapshot to `Saved/BlueprintAIBridge/Snapshots/`.
 4. Type what you want changed in **Task Description**, then **Copy to Clipboard** — you get the
    prompt prefix and the JSON in one paste.
-5. Paste the AI's JSON reply into **AI Response JSON** and click **Analyze Diff**.
+5. Get the reply into **AI Response JSON** — either paste it, or click **Load JSON File...**
+   and pick the file, which loads it and runs the analysis in one step. Either way the text may
+   be wrapped in a ```json fence or surrounded by prose; the JSON object is pulled out of it.
 6. Untick anything you do not want, then **Apply Selected Changes**. The whole apply is one
    transaction, so Ctrl+Z undoes it.
 
