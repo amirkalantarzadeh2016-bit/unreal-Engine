@@ -79,7 +79,13 @@ public:
 	static UTourSequencePreset* LoadTourPresetFromSlot(const UObject* WorldContextObject, const FString& SlotName, int32 UserIndex = 0);
 
 	/**
-	 * List every tour slot that exists on disk.
+	 * List every save slot that exists on disk.
+	 *
+	 * The engine's save system offers no enumeration entry point and no way to inspect a slot's
+	 * class without loading it, so this lists the slot directory and returns every slot it finds
+	 * - including saves written by other systems. LoadTourFromSlot rejects a non-tour slot
+	 * cleanly, so the cost of a stray name in the list is one warning, not a crash.
+	 *
 	 * @return Slot names, without the .sav extension, in filesystem order.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "ArchViz Tour|Persistence")

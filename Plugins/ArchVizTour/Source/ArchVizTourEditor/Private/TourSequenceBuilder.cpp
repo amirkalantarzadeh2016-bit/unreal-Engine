@@ -21,7 +21,6 @@
 #include "Tracks/MovieScene3DTransformTrack.h"
 #include "Tracks/MovieSceneCameraCutTrack.h"
 #include "Tracks/MovieSceneFloatTrack.h"
-#include "TourCameraRig.h"
 #include "TourEditorSettings.h"
 #include "TourGeometryLibrary.h"
 #include "TourPath.h"
@@ -141,8 +140,11 @@ bool UTourSequenceBuilder::SampleTour(
 
 	if (TotalSeconds <= UE_KINDA_SMALL_NUMBER)
 	{
-		UE_LOG(LogArchVizTour, Warning, TEXT("SampleTour: tour '%s' has no duration."), *Preset->GetName());
+		UE_LOG(LogArchVizTour, Warning,
+			TEXT("SampleTour: tour '%s' resolved to no duration. Open the level holding its paths before baking."),
+			*Preset->GetName());
 		Subsystem->StopTour();
+		Subsystem->ReleaseCameraRig();
 		return false;
 	}
 
@@ -151,13 +153,8 @@ bool UTourSequenceBuilder::SampleTour(
 	OutStates.Reserve(SampleCount);
 	OutTimes.Reserve(SampleCount);
 
-	ATourCameraRig* Rig = Subsystem->GetOrSpawnCameraRig();
-	if (Rig == nullptr)
-	{
-		UE_LOG(LogArchVizTour, Warning, TEXT("SampleTour: could not create a camera rig to sample through."));
-		Subsystem->StopTour();
-		return false;
-	}
+	int32 UnresolvedSamples = 0;
+	FTourCameraState LastValidState;
 
 	for (int32 Index = 0; Index < SampleCount; ++Index)
 	{
@@ -167,11 +164,46 @@ bool UTourSequenceBuilder::SampleTour(
 		// which is exactly what a bake needs.
 		Subsystem->ScrubToAlpha(Alpha);
 
-		OutStates.Add(Rig->GetLastAppliedState());
+		// GetCurrentCameraState, not the rig's last pose: the rig is only driven by spline steps,
+		// so reading it directly would bake every static-camera and dwell step as a freeze-frame
+		// of whatever the previous spline step ended on.
+		FTourCameraState State;
+		if (Subsystem->GetCurrentCameraState(State) && State.bValid)
+		{
+			LastValidState = State;
+		}
+		else
+		{
+			// A step whose references are missing cannot contribute a pose. Holding the last
+			// valid one keeps the curve continuous instead of punching a hole to the origin
+			// through the middle of the bake.
+			++UnresolvedSamples;
+			State = LastValidState;
+		}
+
+		OutStates.Add(State);
 		OutTimes.Add(Alpha * TotalSeconds);
 	}
 
 	Subsystem->StopTour();
+	// The bake spawned a rig in the editor world purely to sample through; leaving it behind
+	// puts a mystery actor in the outliner for everyone who opens the level afterwards.
+	Subsystem->ReleaseCameraRig();
+
+	if (UnresolvedSamples > 0)
+	{
+		UE_LOG(LogArchVizTour, Warning,
+			TEXT("SampleTour: %d of %d samples could not be resolved and reused the previous pose. Check that every step's path and camera exist in this level."),
+			UnresolvedSamples, SampleCount);
+	}
+
+	if (!LastValidState.bValid)
+	{
+		UE_LOG(LogArchVizTour, Warning,
+			TEXT("SampleTour: no sample of tour '%s' resolved to a camera pose. Open the level that holds its paths and cameras before baking."),
+			*Preset->GetName());
+		return false;
+	}
 
 	return OutStates.Num() >= 2;
 }

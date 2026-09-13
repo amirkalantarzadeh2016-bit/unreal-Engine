@@ -10,6 +10,7 @@
 #include "TourRenderBackend_MoviePipeline.h"
 #include "TourRenderBackend_SceneCapture.h"
 #include "TourSequencePreset.h"
+#include "TourSubsystem.h"
 
 #define LOCTEXT_NAMESPACE "ArchVizTour"
 
@@ -195,6 +196,13 @@ bool UTourRenderSubsystem::StartRender(UTourSequencePreset* Tour, UTourRenderSet
 		return false;
 	}
 
+	// UTourSequencePreset::GetTotalDuration only sums the *authored* durations, and a spline step
+	// authored with Duration = 0 means "derive the length from the path's cm/s speed" - which is
+	// the recommended way to author one. Asking the subsystem resolves those against the real
+	// geometry; without this, the most idiomatic tour in the plugin reports zero length and the
+	// render is refused.
+	const float ResolvedTourDuration = ResolveTourDuration(Tour, World);
+
 	FTourRenderRequest RenderRequest;
 	RenderRequest.World           = World;
 	RenderRequest.Tour            = Tour;
@@ -203,12 +211,14 @@ bool UTourRenderSubsystem::StartRender(UTourSequencePreset* Tour, UTourRenderSet
 	RenderRequest.Timestamp       = FDateTime::Now();
 	RenderRequest.DurationSeconds = (Settings->DurationSource == ETourRenderDurationSource::Explicit)
 		? Settings->ExplicitDurationSeconds
-		: Tour->GetTotalDuration();
-	RenderRequest.TotalFrames     = Settings->ComputeFrameCount(Tour->GetTotalDuration());
+		: ResolvedTourDuration;
+	RenderRequest.TotalFrames     = Settings->ComputeFrameCount(ResolvedTourDuration);
 
 	if (RenderRequest.DurationSeconds <= 0.0f)
 	{
-		ReportImmediateFailure(TEXT("The tour has no duration to render. Give its steps a positive length, or set an explicit duration."));
+		ReportImmediateFailure(TEXT(
+			"The tour resolved to zero length. Check that its steps reference paths that exist in this level, "
+			"and that those paths have at least two points and a positive speed."));
 		return false;
 	}
 
@@ -238,6 +248,46 @@ void UTourRenderSubsystem::CancelRender()
 
 	UE_LOG(LogArchVizTour, Log, TEXT("Cancelling the active render."));
 	ActiveBackend->Cancel();
+}
+
+float UTourRenderSubsystem::ResolveTourDuration(UTourSequencePreset* Tour, UWorld* World) const
+{
+	if (Tour == nullptr)
+	{
+		return 0.0f;
+	}
+
+	if (World != nullptr)
+	{
+		if (UTourSubsystem* TourSubsystem = World->GetSubsystem<UTourSubsystem>())
+		{
+			// Loading is what resolves each step against the level's actual paths and cameras, so
+			// the answer accounts for speed-derived step lengths and per-point dwells. The
+			// backends load the tour again when they start; loading twice is cheap and keeps the
+			// duration query independent of which backend was chosen.
+			if (TourSubsystem->LoadTour(Tour))
+			{
+				float Elapsed = 0.0f;
+				float Total = 0.0f;
+				TourSubsystem->GetTourTimes(Elapsed, Total);
+
+				if (Total > 0.0f)
+				{
+					return Total;
+				}
+			}
+		}
+	}
+
+	// No world subsystem, or nothing resolved: the authored sum is the only answer left, and it
+	// is correct for a tour whose steps all carry explicit durations.
+	const float AuthoredDuration = Tour->GetTotalDuration();
+
+	UE_LOG(LogArchVizTour, Warning,
+		TEXT("Could not resolve tour '%s' against the current level; falling back to its authored duration of %.2f s. Steps that derive their length from speed will be measured as zero."),
+		*Tour->GetName(), AuthoredDuration);
+
+	return AuthoredDuration;
 }
 
 bool UTourRenderSubsystem::HandleTick(float DeltaSeconds)

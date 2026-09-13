@@ -62,6 +62,9 @@ private:
 	/** Enqueue an asynchronous readback of the render target for a frame index. */
 	void EnqueueReadback(int32 FrameIndex);
 
+	/** Drain outstanding readbacks and writes, then finish the job. */
+	void FinishCapture();
+
 	/** Finish the job: encode if asked, then fire OnCompleted exactly once. */
 	void FinishJob(bool bSuccess, const FString& Error);
 

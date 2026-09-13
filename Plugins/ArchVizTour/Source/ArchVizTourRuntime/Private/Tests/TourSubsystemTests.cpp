@@ -5,6 +5,7 @@
 
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "TourPath.h"
 #include "TourSequencePreset.h"
 #include "TourSubsystem.h"
 #include "TourTypes.h"
@@ -59,6 +60,42 @@ namespace ArchVizTourSubsystemTests
 		UWorld* World = nullptr;
 		FWorldContext* WorldContext = nullptr;
 	};
+
+	/**
+	 * Spawn a straight four-point path of TotalLengthCm, tagged so a step can resolve it.
+	 *
+	 * Linear points make the curve exactly the straight line through them, which gives the
+	 * arc-length and duration assertions an analytic answer to compare against.
+	 */
+	static ATourPath* SpawnStraightPath(UWorld* World, FName Tag, float TotalLengthCm, float SpeedCmPerSecond)
+	{
+		check(World != nullptr);
+
+		FTourPathData PathData;
+		PathData.DefaultSpeed = SpeedCmPerSecond;
+
+		constexpr int32 PointCount = 4;
+		for (int32 Index = 0; Index < PointCount; ++Index)
+		{
+			const float Alpha = static_cast<float>(Index) / static_cast<float>(PointCount - 1);
+
+			FTourPoint Point;
+			Point.Location  = FVector(TotalLengthCm * Alpha, 0.0, 0.0);
+			Point.PointType = ESplinePointType::Linear;
+			Point.Speed     = SpeedCmPerSecond;
+			PathData.Points.Add(Point);
+		}
+
+		ATourPath* Path = World->SpawnActor<ATourPath>(ATourPath::StaticClass(), FTransform::Identity);
+		if (Path == nullptr)
+		{
+			return nullptr;
+		}
+
+		Path->Tags.AddUnique(Tag);
+		Path->ApplyPathData(PathData, /*bApplyTransform*/ false);
+		return Path;
+	}
 
 	/** A tour of Dwell steps with distinct labels and durations. */
 	static UTourSequencePreset* MakeDwellTour(UObject* Outer, int32 StepCount)
@@ -237,6 +274,21 @@ bool FArchVizTourStepNavigationBoundaryTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Playing a finished tour restarts at step 0"), Subsystem->GetCurrentStepIndex(), 0);
 		TestEqual(TEXT("Playing a finished tour resumes Playing"), static_cast<int32>(Subsystem->GetState()), static_cast<int32>(ETourState::Playing));
 
+		// Jumping on a *finished* tour must honour the requested index. Routing the jump through
+		// PlayTour used to reset it to the top, because PlayTour treats Finished as "replay".
+		Subsystem->JumpToStep(StepCount - 1);
+		Subsystem->NextStep();
+		TestEqual(TEXT("The tour finished again"), static_cast<int32>(Subsystem->GetState()), static_cast<int32>(ETourState::Finished));
+
+		Subsystem->JumpToStep(1);
+		TestEqual(TEXT("Jumping on a finished tour lands on the requested step, not step 0"), Subsystem->GetCurrentStepIndex(), 1);
+		TestEqual(TEXT("Jumping on a finished tour resumes playback"), static_cast<int32>(Subsystem->GetState()), static_cast<int32>(ETourState::Playing));
+
+		Subsystem->StopTour();
+		Subsystem->JumpToStep(2);
+		TestEqual(TEXT("Jumping on an idle tour lands on the requested step"), Subsystem->GetCurrentStepIndex(), 2);
+		TestEqual(TEXT("Jumping on an idle tour starts playback"), static_cast<int32>(Subsystem->GetState()), static_cast<int32>(ETourState::Playing));
+
 		Subsystem->StopTour();
 	}
 
@@ -283,6 +335,127 @@ bool FArchVizTourStepNavigationBoundaryTest::RunTest(const FString& Parameters)
 		Subsystem->StopTour();
 	}
 
+	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Speed-derived step lengths, progress and resolved camera state
+// ---------------------------------------------------------------------------
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FArchVizTourSplineStepResolutionTest,
+	"ArchVizTour.Subsystem.SplineStepDurationAndCameraState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ClientContext | EAutomationTestFlags::EngineFilter)
+
+bool FArchVizTourSplineStepResolutionTest::RunTest(const FString& Parameters)
+{
+	using namespace ArchVizTourSubsystemTests;
+
+	FScopedTestWorld TestWorld;
+	UTourSubsystem* Subsystem = TestWorld.GetSubsystem();
+
+	if (!TestNotNull(TEXT("Tour subsystem on the test world"), Subsystem))
+	{
+		return false;
+	}
+
+	constexpr float PathLength = 900.0f;   // centimetres
+	constexpr float PathSpeed  = 300.0f;   // centimetres per second -> 3 s to traverse
+	constexpr float DwellTime  = 2.0f;     // seconds
+
+	ATourPath* Path = SpawnStraightPath(TestWorld.World, FName(TEXT("TestPath")), PathLength, PathSpeed);
+	if (!TestNotNull(TEXT("Spawned tour path"), Path))
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("The spawned path measures its authored length"), Path->GetPathLength(), PathLength, 1.0f);
+	TestTrue(TEXT("The spawned path is traversable"), Path->IsTraversable());
+	TestEqual(TEXT("The path reports its authored speed"), Path->GetSpeedAtDistance(PathLength * 0.5f), PathSpeed, 0.1f);
+
+	UTourSequencePreset* Preset = NewObject<UTourSequencePreset>(GetTransientPackage(), NAME_None, RF_Transient);
+
+	// Duration 0 on a spline step means "derive the length from the authored cm/s speed", which
+	// is how the quickstart authors one. A tour built this way used to report zero total length,
+	// which made the render subsystem refuse it.
+	FTourStep MoveStep;
+	MoveStep.StepType      = ETourStepType::SplineMove;
+	MoveStep.Label         = FText::FromString(TEXT("Approach"));
+	MoveStep.Duration      = 0.0f;
+	MoveStep.BlendTime     = 0.0f;
+	MoveStep.SplinePathRef = FName(TEXT("TestPath"));
+	Preset->Steps.Add(MoveStep);
+
+	FTourStep HoldStep;
+	HoldStep.StepType  = ETourStepType::Dwell;
+	HoldStep.Label     = FText::FromString(TEXT("Hold"));
+	HoldStep.Duration  = DwellTime;
+	HoldStep.BlendTime = 0.0f;
+	Preset->Steps.Add(HoldStep);
+
+	if (!TestTrue(TEXT("Loading the spline tour succeeds"), Subsystem->LoadTour(Preset)))
+	{
+		return false;
+	}
+
+	// --- Duration derived from speed ---------------------------------------
+	float Elapsed = 0.0f;
+	float Total = 0.0f;
+	Subsystem->GetTourTimes(Elapsed, Total);
+
+	const float ExpectedTotal = (PathLength / PathSpeed) + DwellTime;
+	TestEqual(TEXT("The tour's resolved length is the traversal time plus the dwell"), Total, ExpectedTotal, 0.05f);
+
+	// --- Arc-length traversal and camera resolution -------------------------
+	Subsystem->PlayTour();
+
+	FTourCameraState State;
+	if (!TestTrue(TEXT("The camera state resolves at the start of the tour"), Subsystem->GetCurrentCameraState(State)))
+	{
+		return false;
+	}
+	TestEqual(TEXT("The tour starts at the beginning of the path"), State.Location.X, 0.0, 1.0);
+
+	// Half of the *move* portion, expressed as a fraction of the whole tour.
+	const float HalfwayAlpha = (PathLength / PathSpeed) * 0.5f / ExpectedTotal;
+	Subsystem->ScrubToAlpha(HalfwayAlpha);
+
+	TestTrue(TEXT("The camera state resolves mid-move"), Subsystem->GetCurrentCameraState(State));
+	TestEqual(TEXT("Half the move time is half the distance, because traversal is arc-length parameterised"),
+		State.Location.X, static_cast<double>(PathLength) * 0.5, 5.0);
+
+	// --- A Dwell step reports the pose the previous step left on screen ------
+	Subsystem->ScrubToAlpha(1.0f);
+	TestEqual(TEXT("Scrubbing to the end lands on the dwell step"), Subsystem->GetCurrentStepIndex(), 1);
+
+	TestTrue(TEXT("The camera state still resolves during a dwell"), Subsystem->GetCurrentCameraState(State));
+	TestEqual(TEXT("A dwell holds the end of the preceding spline move, not the origin"),
+		State.Location.X, static_cast<double>(PathLength), 5.0);
+
+	// --- Progress is monotonic and spans the full range ----------------------
+	float PreviousProgress = -1.0f;
+	for (int32 Step = 0; Step <= 20; ++Step)
+	{
+		const float Alpha = static_cast<float>(Step) / 20.0f;
+		Subsystem->ScrubToAlpha(Alpha);
+
+		const float Progress = Subsystem->GetTourProgress();
+		if (Progress < PreviousProgress - 1.e-3f)
+		{
+			AddError(FString::Printf(
+				TEXT("Tour progress went backwards while scrubbing forwards: %.4f after %.4f at alpha %.2f."),
+				Progress, PreviousProgress, Alpha));
+			break;
+		}
+		PreviousProgress = Progress;
+	}
+
+	Subsystem->ScrubToAlpha(0.0f);
+	TestEqual(TEXT("Scrubbing to 0 reports no progress"), Subsystem->GetTourProgress(), 0.0f, 1.e-3f);
+	Subsystem->ScrubToAlpha(1.0f);
+	TestTrue(TEXT("Scrubbing to 1 reports full progress"), Subsystem->GetTourProgress() > 0.98f);
+
+	Subsystem->StopTour();
 	return true;
 }
 

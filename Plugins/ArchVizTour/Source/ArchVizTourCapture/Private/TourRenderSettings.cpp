@@ -50,20 +50,53 @@ FString UTourRenderSettings::GetImageExtension() const
 	}
 }
 
+FString UTourRenderSettings::GetFrameNumberPrintfToken() const
+{
+	return FString::Printf(TEXT("%%0%dd"), FMath::Clamp(FrameNumberPadding, 1, 10));
+}
+
 FString UTourRenderSettings::BuildRelativeFileName(const FString& TourName, int32 FrameIndex, const FDateTime& Timestamp) const
+{
+	const FString FrameText = FString::Printf(
+		TEXT("%0*d"), FMath::Clamp(FrameNumberPadding, 1, 10), FMath::Max(FrameIndex, 0));
+
+	return BuildRelativeFileNameWithToken(TourName, FrameText, Timestamp);
+}
+
+FString UTourRenderSettings::BuildRelativeFileNameWithToken(const FString& TourName, const FString& FrameToken, const FDateTime& Timestamp) const
 {
 	using namespace ArchVizTour::RenderPrivate;
 
 	FString Result = FileNamePattern.IsEmpty() ? TEXT("{tour}/{date}/{tour}_{frame}") : FileNamePattern;
 
-	const FString FrameText = FString::Printf(TEXT("%0*d"), FMath::Clamp(FrameNumberPadding, 1, 10), FMath::Max(FrameIndex, 0));
-
 	Result.ReplaceInline(TEXT("{tour}"),   *SanitizeForFileName(TourName), ESearchCase::IgnoreCase);
 	Result.ReplaceInline(TEXT("{date}"),   *Timestamp.ToString(TEXT("%Y-%m-%d")), ESearchCase::IgnoreCase);
 	Result.ReplaceInline(TEXT("{time}"),   *Timestamp.ToString(TEXT("%H-%M-%S")), ESearchCase::IgnoreCase);
-	Result.ReplaceInline(TEXT("{frame}"),  *FrameText, ESearchCase::IgnoreCase);
 	Result.ReplaceInline(TEXT("{width}"),  *FString::FromInt(Resolution.X), ESearchCase::IgnoreCase);
 	Result.ReplaceInline(TEXT("{height}"), *FString::FromInt(Resolution.Y), ESearchCase::IgnoreCase);
+	// Substituted last, so a token that expands to something containing "{frame}" cannot be
+	// re-expanded, and so an empty token leaves a recognisable separator to trim.
+	Result.ReplaceInline(TEXT("{frame}"),  *FrameToken, ESearchCase::IgnoreCase);
+
+	if (FrameToken.IsEmpty())
+	{
+		// An empty frame token leaves the separator that joined it, e.g. "Tour_" or "Tour-".
+		Result.TrimEndInline();
+		while (Result.EndsWith(TEXT("_"), ESearchCase::CaseSensitive)
+			|| Result.EndsWith(TEXT("-"), ESearchCase::CaseSensitive)
+			|| Result.EndsWith(TEXT("."), ESearchCase::CaseSensitive)
+			|| Result.EndsWith(TEXT("/"), ESearchCase::CaseSensitive))
+		{
+			// LeftChop rather than LeftChopInline: the inline form's shrink argument changed
+			// type between 5.4 and 5.5, and this runs once per job.
+			Result = Result.LeftChop(1);
+		}
+
+		if (Result.IsEmpty())
+		{
+			Result = SanitizeForFileName(TourName);
+		}
+	}
 
 	return Result;
 }

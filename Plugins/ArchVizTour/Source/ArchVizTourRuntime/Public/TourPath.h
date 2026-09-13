@@ -266,13 +266,23 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tour Path|Actions", meta = (Units = "cm"))
 	float FlattenHeight = 0.0f;
 
-	/** Hide or restore the rail meshes. Used by the render pipeline around a capture. */
+	/**
+	 * Hide or restore the rail meshes for an offline render.
+	 *
+	 * Restoring re-derives per-component visibility through RebuildRailMeshes rather than
+	 * switching every pooled component on: the pool keeps surplus segments parked, and blanket
+	 * restoration would make those parked segments visible for the first time.
+	 */
 	void SetRailVisible(bool bVisible);
 
 private:
 	/** Pooled rail segments. Surplus components are hidden and deactivated, never destroyed. */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<USplineMeshComponent>> RailMeshComponents;
+
+	/** Set while an offline render has the rail hidden; suppresses it inside RebuildRailMeshes. */
+	UPROPERTY(Transient)
+	bool bRailSuppressedForCapture = false;
 
 	/**
 	 * LookAt targets resolved by name, cached so a per-frame evaluation never iterates actors.

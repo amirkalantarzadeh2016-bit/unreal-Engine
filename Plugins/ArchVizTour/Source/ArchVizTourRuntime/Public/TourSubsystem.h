@@ -279,6 +279,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ArchViz Tour")
 	TArray<FText> GetStepLabels() const;
 
+	/**
+	 * The camera pose and lens the tour is currently presenting.
+	 *
+	 * Resolves what the step type actually implies rather than reporting the rig unconditionally:
+	 * a spline step samples its path, a static-camera step reads that camera actor, and a Dwell
+	 * or Custom step reports whatever the most recent camera-defining step left on screen. The
+	 * offline bake depends on this - reading the rig alone would freeze every static-camera step
+	 * at the previous spline step's last pose.
+	 *
+	 * @param OutState  Receives the state. bValid is false when nothing can be resolved.
+	 * @return true when OutState is usable.
+	 */
+	UFUNCTION(BlueprintPure, Category = "ArchViz Tour")
+	bool GetCurrentCameraState(FTourCameraState& OutState) const;
+
 	/** Elapsed tour time in seconds, and the tour's total length. */
 	UFUNCTION(BlueprintPure, Category = "ArchViz Tour")
 	void GetTourTimes(float& OutElapsedSeconds, float& OutTotalSeconds) const;
@@ -325,6 +340,16 @@ public:
 	/** The rig driven during SplineMove steps, spawning it if the tour has not needed it yet. */
 	UFUNCTION(BlueprintCallable, Category = "ArchViz Tour")
 	ATourCameraRig* GetOrSpawnCameraRig();
+
+	/**
+	 * Destroy the camera rig if one was spawned.
+	 *
+	 * Playback deliberately keeps the rig between tours, so StopTour does not do this. An
+	 * offline bake does need it: sampling a tour in the editor world spawns a rig that would
+	 * otherwise sit in the outliner until the level is closed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "ArchViz Tour")
+	void ReleaseCameraRig();
 
 	// ---------------------------------------------------------------------
 	// Configuration
@@ -425,6 +450,26 @@ private:
 
 	/** Break a resolved spline step into dwell-separated sub-moves and total its duration. */
 	void BuildSplineStepTimeline(int32 StepIndex);
+
+	/**
+	 * Recompute every step's StartTime and the tour's TotalDuration from the current durations.
+	 *
+	 * Durations are refreshed whenever a step is entered, because the geometry behind it can
+	 * change (a path edited, a path that only just spawned). Without recomputing the start times
+	 * alongside them, GetTourProgress and ScrubToAlpha keep working from the durations that were
+	 * resolved at load and silently drift out of step with playback.
+	 */
+	void RecomputeStepTimes();
+
+	/**
+	 * Enter a step and start playing from it.
+	 * Shared by PlayTour, JumpToStep and RestartTour so a jump made while the tour is idle or
+	 * finished honours the requested index instead of being reset to the top.
+	 */
+	void StartPlaybackAt(int32 StepIndex, bool bFromStart);
+
+	/** The step whose camera is on screen at StepIndex, walking back over Dwell/Custom holds. */
+	int32 FindCameraDefiningStep(int32 StepIndex) const;
 
 	/**
 	 * Map elapsed time inside a spline step to a distance along its path.

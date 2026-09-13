@@ -198,6 +198,29 @@ bool FTourRenderBackend_SceneCapture::Tick(float DeltaSeconds)
 		return true;
 	}
 
+	// A tour that stops advancing before the frame budget runs out would otherwise be recorded
+	// as a long freeze-frame. This happens for real: a step with bPauseAtEnd pauses playback,
+	// and a tour whose steps derive their length from speed can finish slightly early.
+	if (UTourSubsystem* TourSubsystem = World->GetSubsystem<UTourSubsystem>())
+	{
+		const ETourState TourState = TourSubsystem->GetState();
+		if (TourState == ETourState::Finished || TourState == ETourState::Idle)
+		{
+			UE_LOG(LogArchVizTour, Log,
+				TEXT("The tour ended after %d of %d expected frames; finishing the render there rather than recording a freeze-frame."),
+				FramesCaptured, Request.TotalFrames);
+
+			FinishCapture();
+			return false;
+		}
+
+		if (TourState == ETourState::Paused)
+		{
+			// A bPauseAtEnd step is an authored stop for a live audience, not for a render.
+			TourSubsystem->SetPaused(false);
+		}
+	}
+
 	CaptureCurrentFrame();
 	EnqueueReadback(FramesCaptured);
 
@@ -210,40 +233,53 @@ bool FTourRenderBackend_SceneCapture::Tick(float DeltaSeconds)
 
 	if (FramesCaptured >= Request.TotalFrames)
 	{
-		using namespace ArchVizTour::SceneCaptureBackend;
-
-		// The remaining readbacks are still in flight; flushing here is the one place a stall is
-		// correct, because the job is over and the frames have to exist before ffmpeg runs.
-		FlushRenderingCommands();
-
-		// Then wait for the write queue to catch up, bounded so a stuck disk cannot hang the
-		// process. This is the only place the game thread waits, and the job is already over.
-		const double Deadline = FPlatformTime::Seconds() + WriteDrainTimeoutSeconds;
-		while (PendingWrites.Load() > 0 && FPlatformTime::Seconds() < Deadline)
-		{
-			FPlatformProcess::Sleep(0.01f);
-		}
-
-		if (PendingWrites.Load() > 0)
-		{
-			FinishJob(false, FString::Printf(
-				TEXT("%d frame writes did not complete within %.0f seconds."),
-				PendingWrites.Load(), WriteDrainTimeoutSeconds));
-			return false;
-		}
-
-		const int32 Failures = FailedWrites.Load();
-		if (Failures > 0)
-		{
-			FinishJob(false, FString::Printf(TEXT("%d of %d frames could not be written."), Failures, Request.TotalFrames));
-			return false;
-		}
-
-		FinishJob(true, FString());
+		FinishCapture();
 		return false;
 	}
 
 	return true;
+}
+
+void FTourRenderBackend_SceneCapture::FinishCapture()
+{
+	using namespace ArchVizTour::SceneCaptureBackend;
+
+	// The remaining readbacks are still in flight; flushing here is the one place a stall is
+	// correct, because capture is over and the frames have to exist before ffmpeg runs.
+	FlushRenderingCommands();
+
+	// Then wait for the write queue to catch up, bounded so a stuck disk cannot hang the
+	// process. This is the only place the game thread waits, and the job is already over.
+	const double Deadline = FPlatformTime::Seconds() + WriteDrainTimeoutSeconds;
+	while (PendingWrites.Load() > 0 && FPlatformTime::Seconds() < Deadline)
+	{
+		FPlatformProcess::Sleep(0.01f);
+	}
+
+	if (PendingWrites.Load() > 0)
+	{
+		FinishJob(false, FString::Printf(
+			TEXT("%d frame writes did not complete within %.0f seconds."),
+			PendingWrites.Load(), WriteDrainTimeoutSeconds));
+		return;
+	}
+
+	const int32 Failures = FailedWrites.Load();
+	if (Failures > 0)
+	{
+		FinishJob(false, FString::Printf(TEXT("%d of %d frames could not be written."), Failures, FramesCaptured));
+		return;
+	}
+
+	if (FramesCaptured == 0)
+	{
+		// Reaching here with nothing captured means the tour never started advancing. Reporting
+		// success would hand the caller an empty directory and call it a render.
+		FinishJob(false, TEXT("The render produced no frames. The tour did not start playing; check that its steps reference paths and cameras that exist in this level."));
+		return;
+	}
+
+	FinishJob(true, FString());
 }
 
 void FTourRenderBackend_SceneCapture::Cancel()
@@ -581,19 +617,19 @@ bool FTourRenderBackend_SceneCapture::EncodeVideo(FString& OutVideoPath, FString
 		? Request.Tour->TourTitle.ToString()
 		: TEXT("Tour");
 
-	// ffmpeg consumes a printf-style pattern, so the {frame} token is replaced by %0Nd rather
-	// than by a number.
-	FString InputPattern = Request.Settings->BuildRelativeFileName(TourName, 0, Request.Timestamp);
-	{
-		const FString FirstFrameText = FString::Printf(TEXT("%0*d"), FMath::Clamp(Request.Settings->FrameNumberPadding, 1, 10), 0);
-		const FString PrintfToken = FString::Printf(TEXT("%%0%dd"), FMath::Clamp(Request.Settings->FrameNumberPadding, 1, 10));
-		InputPattern.ReplaceInline(*FirstFrameText, *PrintfToken, ESearchCase::CaseSensitive);
-	}
+	// ffmpeg consumes a printf-style pattern, so {frame} is substituted with "%04d" directly.
+	// Rendering frame zero and then searching the finished name for "0000" would also match a
+	// date, a resolution, or a tour named "Block 0000".
+	const FString InputPattern = Request.Settings->BuildRelativeFileNameWithToken(
+		TourName, Request.Settings->GetFrameNumberPrintfToken(), Request.Timestamp);
+
+	// The video carries no frame number at all, so the token expands to nothing and the
+	// separator it left behind is trimmed.
+	const FString OutputPattern = Request.Settings->BuildRelativeFileNameWithToken(
+		TourName, FString(), Request.Timestamp);
 
 	const FString InputPath = FPaths::SetExtension(Request.OutputDirectory / InputPattern, Request.Settings->GetImageExtension());
-	const FString OutputPath = FPaths::SetExtension(
-		Request.OutputDirectory / Request.Settings->BuildRelativeFileName(TourName, 0, Request.Timestamp),
-		Request.Settings->VideoExtension);
+	const FString OutputPath = FPaths::SetExtension(Request.OutputDirectory / OutputPattern, Request.Settings->VideoExtension);
 
 	const FString Executable = ResolveFFmpegExecutable();
 

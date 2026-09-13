@@ -4,6 +4,7 @@
 
 #include "ArchVizTourLog.h"
 #include "CineCameraActor.h"
+#include "CineCameraComponent.h"
 #include "Engine/AssetManager.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -20,6 +21,7 @@
 #include "TourCameraRig.h"
 #include "TourGeometryLibrary.h"
 #include "TourPath.h"
+#include "TourSplineComponent.h"
 #include "EnhancedInputComponent.h"
 #include "InputAction.h"
 #include "EnhancedInputSubsystems.h"
@@ -465,13 +467,22 @@ void UTourSubsystem::RebuildResolvedSteps()
 
 	ResolvedSteps.SetNum(LoadedPreset->Steps.Num());
 
-	float AccumulatedTime = 0.0f;
 	for (int32 Index = 0; Index < ResolvedSteps.Num(); ++Index)
 	{
 		ResolveStep(Index);
+	}
 
-		ResolvedSteps[Index].StartTime = AccumulatedTime;
-		AccumulatedTime += FMath::Max(ResolvedSteps[Index].Duration, ArchVizTour::SubsystemPrivate::MinStepDuration);
+	RecomputeStepTimes();
+}
+
+void UTourSubsystem::RecomputeStepTimes()
+{
+	float AccumulatedTime = 0.0f;
+
+	for (FTourResolvedStep& Resolved : ResolvedSteps)
+	{
+		Resolved.StartTime = AccumulatedTime;
+		AccumulatedTime += FMath::Max(Resolved.Duration, ArchVizTour::SubsystemPrivate::MinStepDuration);
 	}
 
 	TotalDuration = AccumulatedTime;
@@ -665,9 +676,18 @@ void UTourSubsystem::PlayTour()
 	// and the state is about to become Playing.
 	const bool bRestartFromTop = (State == ETourState::Finished) || !IsValidStepIndex(CurrentStepIndex);
 
-	if (bRestartFromTop)
+	StartPlaybackAt(bRestartFromTop ? 0 : CurrentStepIndex, bRestartFromTop);
+}
+
+void UTourSubsystem::StartPlaybackAt(int32 StepIndex, bool bFromStart)
+{
+	check(LoadedPreset != nullptr);
+
+	const int32 ClampedIndex = FMath::Clamp(StepIndex, 0, FMath::Max(GetStepCount() - 1, 0));
+
+	CurrentStepIndex = ClampedIndex;
+	if (bFromStart)
 	{
-		CurrentStepIndex = 0;
 		StepElapsed = 0.0f;
 	}
 
@@ -682,7 +702,7 @@ void UTourSubsystem::PlayTour()
 	SetupTourInput();
 
 	SetState(ETourState::Playing);
-	BeginStep(FMath::Max(CurrentStepIndex, 0), bRestartFromTop);
+	BeginStep(ClampedIndex, bFromStart);
 }
 
 void UTourSubsystem::StopTour()
@@ -841,9 +861,15 @@ void UTourSubsystem::JumpToStep(int32 StepIndex)
 	if (State == ETourState::Finished || State == ETourState::Idle)
 	{
 		// Jumping is an implicit play request: a transport that silently moves the playhead
-		// without resuming reads as broken.
-		CurrentStepIndex = ClampedIndex;
-		PlayTour();
+		// without resuming reads as broken. Routed through StartPlaybackAt rather than PlayTour,
+		// because PlayTour restarts a *finished* tour from the top - which would quietly discard
+		// the index the caller just asked for.
+		if (const APlayerController* Controller = GetTourController())
+		{
+			PreTourViewTarget = Controller->GetViewTarget();
+		}
+
+		StartPlaybackAt(ClampedIndex, /*bFromStart*/ true);
 		return;
 	}
 
@@ -867,6 +893,8 @@ void UTourSubsystem::RestartTour()
 		return;
 	}
 
+	// Already running: reversing mid-tour then restarting must not leave the playhead running
+	// backwards off the front of step 0.
 	BeginStep(0, /*bFromStart*/ true);
 }
 
@@ -944,8 +972,7 @@ void UTourSubsystem::ScrubToAlpha(float Alpha)
 
 	const bool bStepChanged = (TargetStep != CurrentStepIndex);
 
-	CurrentStepIndex = TargetStep;
-	StepElapsed = FMath::Clamp(
+	const float TargetStepElapsed = FMath::Clamp(
 		TargetTime - ResolvedSteps[TargetStep].StartTime,
 		0.0f,
 		FMath::Max(ResolvedSteps[TargetStep].Duration, ArchVizTour::SubsystemPrivate::MinStepDuration));
@@ -956,21 +983,37 @@ void UTourSubsystem::ScrubToAlpha(float Alpha)
 			FMovieSceneSequencePlaybackParams(TargetTime, EUpdatePositionMethod::Scrub));
 	}
 
+	// Scrubbing is a discontinuity in every case: the smoothing filter must not ease across it.
+	if (ATourCameraRig* Rig = CameraRig.Get())
+	{
+		Rig->ResetSmoothing();
+	}
+
 	if (bStepChanged)
 	{
-		// Take the new step's view target, but without resetting its elapsed time - the scrub
-		// already decided where inside the step the playhead is.
+		// CurrentStepIndex is deliberately left alone until BeginStep runs. Assigning it first
+		// would make BeginStep see an unchanged index and skip the OnStepChanged broadcast, so a
+		// scrub across a boundary would move the camera without ever telling the UI which step
+		// it landed on.
+		StepElapsed = TargetStepElapsed;
 		BeginStep(TargetStep, /*bFromStart*/ false);
+
+		// BeginStep can land on a different step than requested when one in between cannot be
+		// resolved, and it re-derives that step's duration; re-clamp rather than trusting the
+		// elapsed time computed against the step we asked for.
+		if (IsValidStepIndex(CurrentStepIndex))
+		{
+			StepElapsed = FMath::Clamp(
+				StepElapsed, 0.0f,
+				FMath::Max(ResolvedSteps[CurrentStepIndex].Duration, ArchVizTour::SubsystemPrivate::MinStepDuration));
+		}
 	}
 	else
 	{
-		// Scrubbing is a discontinuity: smoothing must not ease across it.
-		if (ATourCameraRig* Rig = CameraRig.Get())
-		{
-			Rig->ResetSmoothing();
-		}
-		EvaluateCurrentStep(0.0f);
+		StepElapsed = TargetStepElapsed;
 	}
+
+	EvaluateCurrentStep(0.0f);
 
 	OnTourProgress.Broadcast(GetTourProgress(), GetStepProgress());
 }
@@ -1048,12 +1091,12 @@ void UTourSubsystem::BuildSplineStepTimeline(int32 StepIndex)
 		Candidate.Distance = Distance;
 
 		// Endpoints usually fall between authored points, so their easing comes from the nearer
-		// one rather than being invented.
-		if (Path->Points.Num() > 0)
+		// one rather than being invented. The spline's own distance-to-key conversion is used
+		// rather than a linear estimate, which would pick the wrong neighbour wherever the
+		// points are unevenly spaced - exactly the case per-point easing is authored for.
+		if (Path->Points.Num() > 0 && IsValid(Path->Spline))
 		{
-			const float Key = Path->GetPathLength() > UE_KINDA_SMALL_NUMBER
-				? static_cast<float>(Path->Points.Num() - 1) * (Distance / Path->GetPathLength())
-				: 0.0f;
+			const float Key = Path->Spline->GetInputKeyValueAtDistanceAlongSpline(Distance);
 			const int32 Nearest = FMath::Clamp(FMath::RoundToInt(Key), 0, Path->Points.Num() - 1);
 			Candidate.EaseIn  = Path->Points[Nearest].EaseIn;
 			Candidate.EaseOut = Path->Points[Nearest].EaseOut;
@@ -1265,6 +1308,8 @@ void UTourSubsystem::BeginStep(int32 StepIndex, bool bFromStart)
 
 	// Durations depend on resolved geometry, so they are refreshed on entry rather than trusted
 	// from load time - the path may have been edited, or only just spawned.
+	const float PreviousDuration = Resolved.Duration;
+
 	if (Step.StepType == ETourStepType::SplineMove)
 	{
 		BuildSplineStepTimeline(CurrentStepIndex);
@@ -1272,6 +1317,14 @@ void UTourSubsystem::BeginStep(int32 StepIndex, bool bFromStart)
 	else
 	{
 		Resolved.Duration = ResolveStepDuration(CurrentStepIndex);
+	}
+
+	if (!FMath::IsNearlyEqual(PreviousDuration, Resolved.Duration))
+	{
+		// The step got longer or shorter than it was at load, so every later step's start time
+		// moved with it. Leaving them stale would make the progress bar and scrubbing disagree
+		// with where playback actually is.
+		RecomputeStepTimes();
 	}
 
 	if (bFromStart)
@@ -1335,7 +1388,11 @@ void UTourSubsystem::BeginStep(int32 StepIndex, bool bFromStart)
 
 void UTourSubsystem::AdvanceStepForward()
 {
-	check(LoadedPreset != nullptr);
+	if (!IsValidStepIndex(CurrentStepIndex))
+	{
+		FinishTour();
+		return;
+	}
 
 	const FTourStep& CompletedStep = LoadedPreset->Steps[CurrentStepIndex];
 
@@ -1367,7 +1424,11 @@ void UTourSubsystem::AdvanceStepForward()
 
 void UTourSubsystem::AdvanceStepBackward()
 {
-	check(LoadedPreset != nullptr);
+	if (!IsValidStepIndex(CurrentStepIndex))
+	{
+		SetPaused(true);
+		return;
+	}
 
 	const int32 PreviousIndex = CurrentStepIndex - 1;
 
@@ -1492,6 +1553,93 @@ float UTourSubsystem::GetTourProgress() const
 
 	const float Elapsed = ResolvedSteps[CurrentStepIndex].StartTime + FMath::Max(StepElapsed, 0.0f);
 	return FMath::Clamp(Elapsed / TotalDuration, 0.0f, 1.0f);
+}
+
+int32 UTourSubsystem::FindCameraDefiningStep(int32 StepIndex) const
+{
+	if (LoadedPreset == nullptr)
+	{
+		return INDEX_NONE;
+	}
+
+	// Dwell and Custom steps hold whatever the previous step left on screen, so the camera they
+	// present belongs to an earlier step. Walking back finds it; a tour that opens with a Dwell
+	// simply has no camera of its own yet.
+	for (int32 Index = StepIndex; Index >= 0; --Index)
+	{
+		if (!IsValidStepIndex(Index))
+		{
+			continue;
+		}
+
+		const ETourStepType StepType = LoadedPreset->Steps[Index].StepType;
+		if (StepType == ETourStepType::SplineMove || StepType == ETourStepType::StaticCamera)
+		{
+			return Index;
+		}
+	}
+
+	return INDEX_NONE;
+}
+
+bool UTourSubsystem::GetCurrentCameraState(FTourCameraState& OutState) const
+{
+	OutState = FTourCameraState();
+
+	const int32 CameraStep = FindCameraDefiningStep(CurrentStepIndex);
+	if (CameraStep == INDEX_NONE)
+	{
+		// Nothing has defined a camera yet; the rig's last pose is the honest answer, and is
+		// invalid until something has driven it.
+		if (const ATourCameraRig* Rig = CameraRig.Get())
+		{
+			OutState = Rig->GetLastAppliedState();
+		}
+		return OutState.bValid;
+	}
+
+	const FTourStep& Step = LoadedPreset->Steps[CameraStep];
+	const FTourResolvedStep& Resolved = ResolvedSteps[CameraStep];
+
+	if (Step.StepType == ETourStepType::SplineMove)
+	{
+		const ATourPath* Path = Resolved.Path.Get();
+		if (Path == nullptr)
+		{
+			return false;
+		}
+
+		// A held Dwell after a spline step sits at that step's end, not at the current step's
+		// elapsed time, which belongs to a different timeline entirely.
+		const float Elapsed = (CameraStep == CurrentStepIndex)
+			? StepElapsed
+			: FMath::Max(Resolved.Duration, 0.0f);
+
+		return Path->EvaluateAtDistance(ComputeSplineDistance(Resolved, Elapsed), OutState);
+	}
+
+	const ACineCameraActor* Camera = Resolved.StaticCamera.Get();
+	if (Camera == nullptr)
+	{
+		return false;
+	}
+
+	OutState.Location = Camera->GetActorLocation();
+	OutState.Rotation = Camera->GetActorRotation();
+
+	if (const UCineCameraComponent* CameraComponent = Camera->GetCineCameraComponent())
+	{
+		OutState.FocalLength = CameraComponent->CurrentFocalLength;
+		OutState.Aperture    = CameraComponent->CurrentAperture;
+
+		if (CameraComponent->FocusSettings.FocusMethod == ECameraFocusMethod::Manual)
+		{
+			OutState.FocusDistance = CameraComponent->FocusSettings.ManualFocusDistance;
+		}
+	}
+
+	OutState.bValid = true;
+	return true;
 }
 
 void UTourSubsystem::GetTourTimes(float& OutElapsedSeconds, float& OutTotalSeconds) const
@@ -1737,6 +1885,26 @@ ATourCameraRig* UTourSubsystem::GetOrSpawnCameraRig()
 	return Rig;
 }
 
+void UTourSubsystem::ReleaseCameraRig()
+{
+	ATourCameraRig* Rig = CameraRig.Get();
+	if (Rig == nullptr)
+	{
+		CameraRig.Reset();
+		return;
+	}
+
+	Rig->StopCameraShake(GetTourController(), /*bImmediately*/ true);
+
+	const UWorld* World = Rig->GetWorld();
+	if (World != nullptr && !World->bIsTearingDown)
+	{
+		Rig->Destroy();
+	}
+
+	CameraRig.Reset();
+}
+
 ATourPath* UTourSubsystem::RegisterRuntimePath(FName PathName, const FTourPathData& PathData)
 {
 	UWorld* World = GetWorld();
@@ -1775,15 +1943,22 @@ ATourPath* UTourSubsystem::RegisterRuntimePath(FName PathName, const FTourPathDa
 	UE_LOG(LogArchVizTour, Log, TEXT("Registered runtime tour path '%s' (%d points)."),
 		*PathName.ToString(), PathData.Points.Num());
 
-	// Steps that failed to resolve earlier may resolve now.
+	// Steps that failed to resolve earlier may resolve now, and resolving one gives it a real
+	// duration for the first time, which moves every later step's start time.
 	if (LoadedPreset != nullptr)
 	{
+		bool bAnyResolved = false;
 		for (int32 Index = 0; Index < ResolvedSteps.Num(); ++Index)
 		{
 			if (!ResolvedSteps[Index].bResolved)
 			{
-				ResolveStep(Index);
+				bAnyResolved |= ResolveStep(Index);
 			}
+		}
+
+		if (bAnyResolved)
+		{
+			RecomputeStepTimes();
 		}
 	}
 

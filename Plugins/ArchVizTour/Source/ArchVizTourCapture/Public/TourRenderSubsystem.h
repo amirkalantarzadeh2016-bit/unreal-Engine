@@ -84,6 +84,15 @@ public:
 	TObjectPtr<UTourRenderSettings> DefaultSettings;
 
 private:
+	/**
+	 * The tour's real length in seconds, resolved against the level.
+	 *
+	 * Not the same as UTourSequencePreset::GetTotalDuration: a spline step authored with
+	 * Duration = 0 derives its length from the path's cm/s speed, which only the subsystem can
+	 * work out because only it can find the path.
+	 */
+	float ResolveTourDuration(UTourSequencePreset* Tour, UWorld* World) const;
+
 	/** FTSTicker callback that drives the active backend. */
 	bool HandleTick(float DeltaSeconds);
 

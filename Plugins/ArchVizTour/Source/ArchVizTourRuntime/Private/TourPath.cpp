@@ -496,14 +496,18 @@ void ATourPath::RebuildRailMeshes()
 		Spline->GetChildrenComponents(/*bIncludeAllDescendants*/ false, Children);
 		for (USceneComponent* Child : Children)
 		{
-			if (USplineMeshComponent* Adopted = Cast<USplineMeshComponent>(Child))
+			USplineMeshComponent* Adopted = Cast<USplineMeshComponent>(Child);
+			// Only components this actor created are adopted. A spline mesh a designer attached
+			// to the path by hand is theirs, and quietly repurposing it as a pool slot would
+			// move it onto the curve and then hide it.
+			if (Adopted != nullptr && Adopted->HasAnyFlags(RF_Transient))
 			{
 				RailMeshComponents.AddUnique(Adopted);
 			}
 		}
 	}
 
-	const bool bWantRail = bShowRailMesh && RailMesh != nullptr && IsTraversable();
+	const bool bWantRail = bShowRailMesh && !bRailSuppressedForCapture && RailMesh != nullptr && IsTraversable();
 
 	const int32 SegmentsPerSplineSegment = FMath::Clamp(RailSegmentsPerSplineSegment, 1, 32);
 	const int32 DesiredCount = bWantRail
@@ -575,14 +579,17 @@ void ATourPath::RebuildRailMeshes()
 
 void ATourPath::SetRailVisible(bool bVisible)
 {
-	for (USplineMeshComponent* Component : RailMeshComponents)
+	if (bRailSuppressedForCapture == !bVisible)
 	{
-		if (IsValid(Component))
-		{
-			Component->SetHiddenInGame(!bVisible);
-			Component->SetVisibility(bVisible, /*bPropagateToChildren*/ false);
-		}
+		return;
 	}
+
+	bRailSuppressedForCapture = !bVisible;
+
+	// Rebuild rather than toggling every pooled component: the pool deliberately keeps surplus
+	// segments parked and hidden, and switching them all on to "restore" would reveal segments
+	// that were never visible in the first place.
+	RebuildRailMeshes();
 }
 
 // ---------------------------------------------------------------------------

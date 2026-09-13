@@ -219,6 +219,25 @@ public:
 	UFUNCTION(BlueprintPure, Category = "ArchViz Tour|Render")
 	FString BuildRelativeFileName(const FString& TourName, int32 FrameIndex, const FDateTime& Timestamp) const;
 
+	/**
+	 * Expand FileNamePattern with an arbitrary string in place of {frame}.
+	 *
+	 * The encoder needs the same path with a printf pattern ("%04d") where the frame number
+	 * goes, and the video file needs it with nothing there at all. Substituting directly is the
+	 * only safe way to produce either: searching the finished filename for the digits of frame
+	 * zero would also match a date, a resolution, or a tour named "Block 0000".
+	 *
+	 * @param TourName    Value substituted for {tour}, sanitised for the filesystem.
+	 * @param FrameToken  Value substituted for {frame}. May be empty.
+	 * @param Timestamp   Local time substituted for {date} and {time}.
+	 * @return A path relative to the output directory, without an extension. Trailing separators
+	 *         left behind by an empty FrameToken are trimmed.
+	 */
+	FString BuildRelativeFileNameWithToken(const FString& TourName, const FString& FrameToken, const FDateTime& Timestamp) const;
+
+	/** The printf-style token ffmpeg needs in place of {frame}, e.g. "%04d". */
+	FString GetFrameNumberPrintfToken() const;
+
 	/** Number of frames a job with this configuration will produce. Always at least 1. */
 	UFUNCTION(BlueprintPure, Category = "ArchViz Tour|Render")
 	int32 ComputeFrameCount(float TourDurationSeconds) const;

@@ -372,9 +372,24 @@ own on-screen widget and log report per-frame progress.
 | macOS | Yes, if MRP is packaged | Yes | Usually via Homebrew |
 | Consoles / mobile | Not supported by MRP | Renders frames; writing them depends on the platform's filesystem access | Not available — expect a frame sequence at best |
 
+### Render length
+
+A render's length comes from the tour resolved **against the current level**, not from the sum of
+the authored `Duration` fields. That distinction matters because the recommended way to author a
+spline step is `Duration = 0`, meaning *derive the length from the path's cm/s speed* — a tour
+written that way sums to zero on paper. `UTourRenderSubsystem` asks `UTourSubsystem` for the
+resolved length instead, and falls back to the authored sum (with a warning) only when there is
+no world to resolve against.
+
+The capture also stops early if the tour itself stops advancing — a step with `bPauseAtEnd` is an
+authored stop for a live audience, not for a render, so the capture resumes past it; a tour that
+genuinely finishes ends the render there rather than recording a freeze-frame for the remaining
+frame budget.
+
 Both backends auto-hide every `ATourPath` rail mesh that was visible before the render and
-restore exactly those afterwards, so a rail the user had deliberately hidden is never switched
-back on.
+restore exactly those afterwards. Restoration re-derives per-component visibility rather than
+switching the whole pool on, because the pool deliberately keeps surplus segments parked — a
+blanket restore would reveal segments that were never visible in the first place.
 
 ---
 
@@ -412,6 +427,7 @@ Every function below is callable from Blueprint. Category prefixes are shown wit
 | `Get Step Progress` | Pure | ArchViz Tour |
 | `Get Step Labels` | Pure | ArchViz Tour |
 | `Get Tour Times` | Pure | ArchViz Tour |
+| `Get Current Camera State` | Pure | ArchViz Tour |
 | `Is Play Button Enabled` | Pure | UI |
 | `Is Pause Button Enabled` | Pure | UI |
 | `Is Stop Button Enabled` | Pure | UI |
@@ -420,6 +436,7 @@ Every function below is callable from Blueprint. Category prefixes are shown wit
 | `Register Runtime Path` | Callable | Authoring |
 | `Clear Runtime Paths` | Callable | Authoring |
 | `Get Or Spawn Camera Rig` | Callable | ArchViz Tour |
+| `Release Camera Rig` | Callable | ArchViz Tour |
 
 **Delegates** (all dynamic multicast — bind, do not poll):
 `OnTourStateChanged(ETourState Old, ETourState New)` ·
@@ -655,6 +672,9 @@ UnrealEditor-Cmd.exe <YourProject>.uproject ^
 | `ArchVizTour.Subsystem.StepIndexBounds` | Queries on an empty subsystem are safe; empty presets are refused; out-of-range jumps clamp; scrubbing clamps at both ends; zero and negative time scales are rejected |
 | `ArchVizTour.Subsystem.NextPreviousAtTourBoundaries` | Linear, looping and single-step tours each behave correctly at both ends: Previous restarts the first step, Next finishes a linear tour, a looping tour wraps both ways |
 | `ArchVizTour.Subsystem.PauseAndResume` | Pausing an idle tour is a no-op; toggle round-trips; Play on a paused tour resumes in place rather than restarting; Restart returns to step 0 |
+| `ArchVizTour.Subsystem.SplineStepDurationAndCameraState` | End to end against a real `ATourPath` in a live world: a `Duration = 0` step derives its length from the path's cm/s speed, half the move time is half the distance, a Dwell reports the pose the preceding move ended on, and progress is monotonic across a step boundary |
+| `ArchVizTour.Render.FileNameTokenExpansion` | `{tour}` `{date}` `{time}` `{frame}` `{width}` `{height}` expand correctly; the encoder's `%04d` pattern and the extension-less video name are produced by substitution, so a tour named "Block 0000" is not corrupted; filesystem-hostile characters are stripped |
+| `ArchVizTour.Render.SettingsSanitizeAndFrameCount` | Frame counts never reach zero, an explicit duration overrides the tour length, and every out-of-range setting clamps rather than propagating |
 
 Profiling: `stat ArchVizTour` shows cycle counters for the subsystem tick, path evaluation, rig
 state application and rail rebuild.
@@ -688,6 +708,10 @@ knowing before reading:
   opens a transaction, so `Modify()` alone makes them undoable.
 * **Render backends derive from `FGCObject`.** They own `UObject`s across frames; a bare C++ object
   holding a raw `UObject` pointer is a collected pointer waiting to happen.
+* **A Dwell step has no camera of its own.** `GetCurrentCameraState` walks back to the most
+  recent step that defines one, so a hold reports the pose it is actually holding. The offline
+  bake depends on this; reading the camera rig directly would freeze every static-camera step at
+  the previous spline step's last pose.
 * **No binary assets ship.** The Editor Utility Widget and the Enhanced Input context are C++ base
   classes and a data-asset type instead — see `Content/README.txt` for why and for the suggested
   key bindings.

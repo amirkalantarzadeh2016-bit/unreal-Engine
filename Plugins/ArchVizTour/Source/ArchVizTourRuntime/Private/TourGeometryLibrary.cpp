@@ -679,6 +679,10 @@ FTourPathData UTourGeometryLibrary::ResampleUniform(const FTourPathData& PathDat
 		Result.Points.Pop();
 	}
 
+	// The stored generator parameters still describe this curve's shape, but no longer its point
+	// count. Leaving the old count in place makes a later Generate silently undo the resample.
+	Result.ArcGenerationParams.PointCount = Result.Points.Num();
+
 	return Result;
 }
 
