@@ -200,6 +200,42 @@ FString FBPExporter::GetRelevantComment(UEdGraphNode* Node)
 	return FString();
 }
 
+bool FBPExporter::IsTrivialDefault(UEdGraphPin* Pin)
+{
+	if (Pin == nullptr)
+	{
+		return true;
+	}
+
+	if (Pin->DefaultObject != nullptr || !Pin->DefaultTextValue.IsEmpty())
+	{
+		return false;
+	}
+
+	const FString Value = Pin->DefaultValue.TrimStartAndEnd();
+	if (Value.IsEmpty())
+	{
+		return true;
+	}
+
+	// The zero of each type. Anything else -- true, 0.2, "DoNotLock" -- changes what the node
+	// does, and a reader who only sees the pin's name cannot recover it.
+	static const TCHAR* TrivialValues[] = {
+		TEXT("false"), TEXT("None"), TEXT("0"), TEXT("0.0"), TEXT("0.000000"),
+		TEXT("0, 0, 0"), TEXT("0,0,0")
+	};
+
+	for (const TCHAR* Trivial : TrivialValues)
+	{
+		if (Value.Equals(Trivial, ESearchCase::IgnoreCase))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 bool FBPExporter::HasOverriddenDefault(UEdGraphPin* Pin, const FBPExportOptions& Options)
 {
 	if (Pin == nullptr)
@@ -229,7 +265,7 @@ TSharedPtr<FJsonObject> FBPExporter::SerializePin(UEdGraphPin* Pin, const FBPExp
 	PinJson->SetStringField(TEXT("direction"), Pin->Direction == EGPD_Input ? TEXT("input") : TEXT("output"));
 	PinJson->SetStringField(TEXT("type"), PinTypeToString(Pin->PinType));
 
-	if (HasOverriddenDefault(Pin, Options))
+	if (HasOverriddenDefault(Pin, Options) || !IsTrivialDefault(Pin))
 	{
 		if (!Pin->DefaultValue.IsEmpty())
 		{
@@ -302,6 +338,7 @@ TSharedPtr<FJsonObject> FBPExporter::SerializeNode(
 		const bool bCarriesInformation =
 			Pin->LinkedTo.Num() > 0
 			|| bOverridden
+			|| !IsTrivialDefault(Pin)
 			|| Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec;
 
 		if (bCarriesInformation || !Options.bCollapseUntouchedPins)
@@ -529,6 +566,35 @@ TSharedPtr<FJsonObject> FBPExporter::SerializeGraph(UBlueprint* Blueprint, UEdGr
 	}
 	GraphJson->SetArrayField(TEXT("connections"), ConnectionValues);
 
+	// A data input pin takes exactly one source; only exec inputs merge. More than one means
+	// either the asset is damaged or this exporter is misattributing a link, and both look the
+	// same downstream -- an AI reading it will reason about a graph that cannot exist.
+	for (const auto& Element : Graph->Nodes)
+	{
+		UEdGraphNode* Node = Element;
+		if (Node == nullptr)
+		{
+			continue;
+		}
+
+		for (UEdGraphPin* Pin : Node->Pins)
+		{
+			if (Pin == nullptr || Pin->Direction != EGPD_Input || ShouldSkipPin(Pin))
+			{
+				continue;
+			}
+
+			if (Pin->PinType.PinCategory != UEdGraphSchema_K2::PC_Exec && Pin->LinkedTo.Num() > 1)
+			{
+				UE_LOG(LogBlueprintAIBridge, Warning,
+					TEXT("Export '%s': input pin '%s' on '%s' has %d sources; a data pin takes one. ")
+					TEXT("Open the node and check it before trusting this export."),
+					*Graph->GetName(), *Pin->PinName.ToString(),
+					*Node->GetNodeTitle(ENodeTitleType::ListView).ToString(), Pin->LinkedTo.Num());
+			}
+		}
+	}
+
 	if (Options.bExportCommentBoxes)
 	{
 		const TArray<TSharedPtr<FJsonValue>> Comments = SerializeCommentBoxes(Graph, NodeIdMap);
@@ -683,8 +749,8 @@ FString FBPExporter::BuildPromptPrefix(UBlueprint* Blueprint, const FBPExportOpt
 	Prefix += TEXT("export.\n");
 	Prefix += TEXT("- Connections name pins directly: \"from_pin\" and \"to_pin\" are pin names, which are ");
 	Prefix += TEXT("unique within a node and direction.\n");
-	Prefix += TEXT("- A pin with no \"default_value\" is still at the value its node was created with; ");
-	Prefix += TEXT("only overridden values are listed.\n");
+	Prefix += TEXT("- A pin with no \"default_value\" is empty, false, zero or None. Every value that ");
+	Prefix += TEXT("is not the type's zero is written out, whether or not anyone set it.\n");
 	Prefix += TEXT("- \"unset_pins\" lists, by name only, the pins that are neither connected nor ");
 	Prefix += TEXT("overridden. They exist and can be connected to or given a value like any other.\n");
 	Prefix += TEXT("- A variable getter or reroute node has no \"pins\" array because its pins are ");

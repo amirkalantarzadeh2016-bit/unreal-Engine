@@ -102,6 +102,9 @@ private:
 
 	static TSharedPtr<FJsonObject> SerializePin(UEdGraphPin* Pin, const FBPExportOptions& Options);
 
+	/** True when the pin's value is the type's zero, so its name alone tells the whole story. */
+	static bool IsTrivialDefault(UEdGraphPin* Pin);
+
 	/** True when the pin holds a value someone actually set, rather than the node's own. */
 	static bool HasOverriddenDefault(UEdGraphPin* Pin, const FBPExportOptions& Options);
 
