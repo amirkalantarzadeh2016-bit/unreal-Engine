@@ -12,6 +12,10 @@ UBPAIBridgeSettings::UBPAIBridgeSettings()
 	, bAnnotateClusters(true)
 	, CommentPadding(40.0f)
 	, MinClusterSizeToAnnotate(2)
+	, bCompactExportJson(true)
+	, bOmitUntouchedPinDefaults(true)
+	, bCollapseUntouchedPins(true)
+	, bExportCommentBoxes(true)
 {
 	// Muted, low-alpha fills: a comment box sits behind the nodes, so a saturated colour makes
 	// the graph harder to read rather than easier.

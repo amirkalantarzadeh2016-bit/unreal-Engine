@@ -20,48 +20,67 @@ difference, rolling the Blueprint back to the exported state.
 
 ## Export format
 
+Written as condensed JSON — on a few-hundred-node graph the indentation costs more than the
+content. Shown here expanded for reading:
+
 ```json
 {
   "blueprint_name": "BP_Door",
   "asset_path": "/Game/Blueprints/BP_Door.BP_Door",
   "export_context": "bug_fix",
-  "ue_version": "5.3",
-  "variables": [ { "name": "bIsOpen", "type": "bool", "default": "false", "scope": "blueprint" } ],
+  "ue_version": "5.8",
+  "variables": [ { "name": "bIsOpen", "type": "bool", "default": "false" } ],
   "graphs": [
     {
       "graph_name": "EventGraph",
       "graph_type": "EventGraph",
-      "variables": [],
       "nodes": [
         {
           "id": "N1",
-          "type": "K2Node_Event",
-          "title": "Event BeginPlay",
-          "comment": "Initialize door state",
-          "pins": [ { "pin_id": "P1", "name": "then", "direction": "output", "type": "exec" } ]
+          "type": "K2Node_CallFunction",
+          "title": "Set View Target with Blend",
+          "pins": [
+            { "name": "then", "direction": "output", "type": "exec" },
+            { "name": "NewViewTarget", "direction": "input", "type": "object:Actor" },
+            { "name": "BlendFunc", "direction": "input", "type": "byte:EViewTargetBlendFunction",
+              "default_value": "VTBlend_Cubic" }
+          ],
+          "unset_pins": [ "BlendTime", "BlendExp", "bLockOutgoing" ]
         }
       ],
       "connections": [
-        {
-          "from_node": "N1", "from_pin": "P1", "from_pin_name": "then",
-          "to_node": "N2", "to_pin": "P2", "to_pin_name": "execute"
-        }
-      ]
+        { "from_node": "N1", "from_pin": "then", "to_node": "N2", "to_pin": "execute" }
+      ],
+      "comments": [ { "title": "Door setup", "nodes": [ "N1", "N2" ] } ]
     }
   ]
 }
 ```
 
+What is and is not included, and why:
+
+- **Pins are named, not numbered.** A pin name is unique within a node and direction, so a
+  parallel id buys nothing and costs a field on every pin and two on every connection.
+- **`unset_pins`** holds the pins that are neither connected nor overridden — most of the pins in
+  a real graph. They stay listed so the node's signature is still visible, but a name is all
+  they are worth. Exec pins are always written in full; control flow is what a reader traces.
+- **`default_value` appears only when someone changed it.** A pin still holding the value its
+  node was created with says nothing the node type does not already imply.
+- **`comments`** is the author's own labelling of the graph, resolved by position rather than by
+  the comment node's own contained-node set, which the editor only refreshes on move.
+- Node GUIDs and coordinates are dropped. A node's comment is exported only when the node has at
+  least one connected pin. Hidden and orphaned pins are skipped. Empty arrays are omitted.
+
 Blueprint-scope variables are listed once at the top level; a graph's `variables` array holds
-that graph's local variables only. Node GUIDs and coordinates are dropped. A node's comment is
-exported only when the node has at least one connected pin. Hidden and orphaned pins are
-skipped.
+that graph's local variables only.
 
 With **Export This Graph Only**, a `chunk_info` object is added:
 
 ```json
 "chunk_info": { "graph_index": 2, "total_graphs": 7, "graph_name": "OpenDoor" }
 ```
+
+Compactness is configurable under Project Settings > Plugins > Blueprint Formatter > Export.
 
 ## Response format
 

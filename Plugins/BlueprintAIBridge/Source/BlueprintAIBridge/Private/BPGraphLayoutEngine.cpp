@@ -660,7 +660,7 @@ FBPFormatResult FBPGraphLayoutEngine::FormatBlueprint(UBlueprint* Blueprint, con
 	// Snapshot before anything is touched. This records the Blueprint's logical structure, not
 	// its geometry, so it is a safety net for the graph rather than an undo for the layout --
 	// Ctrl+Z is what restores positions.
-	FBPExportOptions ExportOptions;
+	const FBPExportOptions ExportOptions = FBPExportOptions::FromSettings();
 	const FString ExportJson = FBPExporter::ExportBlueprint(Blueprint, ExportOptions);
 	if (ExportJson.IsEmpty())
 	{

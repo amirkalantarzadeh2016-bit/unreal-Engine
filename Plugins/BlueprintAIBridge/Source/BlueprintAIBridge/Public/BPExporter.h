@@ -34,6 +34,21 @@ struct FBPExportOptions
 
 	/** Index into the flattened graph list used when bChunkedMode is true. */
 	int32 ChunkGraphIndex = 0;
+
+	/** Strip whitespace from the JSON. */
+	bool bCompactJson = true;
+
+	/** Leave out pin values the node shipped with. */
+	bool bOmitUntouchedPinDefaults = true;
+
+	/** List inert pins as bare names under "unset_pins" instead of as full objects. */
+	bool bCollapseUntouchedPins = true;
+
+	/** Export comment boxes and the nodes they enclose. */
+	bool bExportCommentBoxes = true;
+
+	/** Builds options from project settings, leaving graph scope to the caller. */
+	static FBPExportOptions FromSettings();
 };
 
 /**
@@ -78,15 +93,22 @@ public:
 	static FString MakeNodeId(int32 Index);
 
 private:
-	static TSharedPtr<FJsonObject> SerializeGraph(UBlueprint* Blueprint, UEdGraph* Graph);
+	static TSharedPtr<FJsonObject> SerializeGraph(UBlueprint* Blueprint, UEdGraph* Graph, const FBPExportOptions& Options);
 
 	static TSharedPtr<FJsonObject> SerializeNode(
 		UEdGraphNode* Node,
 		const TMap<UEdGraphNode*, FString>& NodeIdMap,
-		int32& InOutPinCounter,
-		TMap<UEdGraphPin*, FString>& OutPinIdMap);
+		const FBPExportOptions& Options);
 
-	static TSharedPtr<FJsonObject> SerializePin(UEdGraphPin* Pin, const FString& PinId);
+	static TSharedPtr<FJsonObject> SerializePin(UEdGraphPin* Pin, const FBPExportOptions& Options);
+
+	/** True when the pin holds a value someone actually set, rather than the node's own. */
+	static bool HasOverriddenDefault(UEdGraphPin* Pin, const FBPExportOptions& Options);
+
+	/** Comment boxes as {title, nodes:[ids]}, using geometric containment. */
+	static TArray<TSharedPtr<FJsonValue>> SerializeCommentBoxes(
+		UEdGraph* Graph,
+		const TMap<UEdGraphNode*, FString>& NodeIdMap);
 
 	/** Returns only comments attached to nodes that have at least one connection. */
 	static FString GetRelevantComment(UEdGraphNode* Node);

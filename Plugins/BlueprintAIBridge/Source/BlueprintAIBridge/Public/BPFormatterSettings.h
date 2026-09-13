@@ -81,6 +81,44 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Annotation", meta = (ClampMin = "1", UIMin = "1", UIMax = "10"))
 	int32 MinClusterSizeToAnnotate;
 
+	/**
+	 * Strip whitespace from the export JSON.
+	 *
+	 * A real Blueprint's export is dominated by indentation -- on a few-hundred-node graph the
+	 * tabs and newlines cost more than the content. Turn this off only to read the JSON by hand.
+	 */
+	UPROPERTY(EditAnywhere, config, Category = "Export")
+	bool bCompactExportJson;
+
+	/**
+	 * Leave out pin values the node itself shipped with.
+	 *
+	 * An untouched pin's value says nothing the node type does not already imply, and these are
+	 * the bulk of the pins in a typical graph.
+	 */
+	UPROPERTY(EditAnywhere, config, Category = "Export")
+	bool bOmitUntouchedPinDefaults;
+
+	/**
+	 * List pins that are neither connected nor overridden as bare names under "unset_pins".
+	 *
+	 * These are the bulk of the pins in a real graph and each one costs a full JSON object to
+	 * say nothing. Collapsing them keeps the node's pin inventory visible -- so an AI can still
+	 * see what there is to connect to -- at a fraction of the size. Exec pins are always kept in
+	 * full, because control flow is what the reader is mostly tracing.
+	 */
+	UPROPERTY(EditAnywhere, config, Category = "Export")
+	bool bCollapseUntouchedPins;
+
+	/**
+	 * Export comment boxes and the nodes they enclose.
+	 *
+	 * This is the author's own labelling of the graph, and it is the cheapest context an AI can
+	 * be given: a few words that name a region of a hundred nodes.
+	 */
+	UPROPERTY(EditAnywhere, config, Category = "Export")
+	bool bExportCommentBoxes;
+
 	/** Comment box colour per cluster type. */
 	UPROPERTY(EditAnywhere, config, Category = "Annotation")
 	TMap<EBPClusterType, FLinearColor> ClusterColors;

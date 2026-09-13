@@ -570,7 +570,7 @@ int32 SBPAIBridgePanel::FindSelectedGraphIndex() const
 
 FBPExportOptions SBPAIBridgePanel::MakeExportOptions() const
 {
-	FBPExportOptions Options;
+	FBPExportOptions Options = FBPExportOptions::FromSettings();
 	Options.Context = SelectedContext;
 
 	const int32 GraphIndex = FindSelectedGraphIndex();
@@ -887,7 +887,7 @@ FReply SBPAIBridgePanel::OnRevertSnapshotClicked()
 
 	// Diff the live graph against the snapshot, then apply every difference: the snapshot is
 	// the target state, so this is a real revert rather than a replay of the last import.
-	FBPExportOptions Options;
+	FBPExportOptions Options = FBPExportOptions::FromSettings();
 	Options.Context = SelectedContext;
 	const FString CurrentJson = FBPExporter::ExportBlueprint(Blueprint, Options);
 
