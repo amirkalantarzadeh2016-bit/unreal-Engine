@@ -10,6 +10,8 @@
 #include "EdGraphNode_Comment.h"
 #include "EdGraphSchema_K2.h"
 #include "K2Node_FunctionEntry.h"
+#include "K2Node_Knot.h"
+#include "K2Node_VariableGet.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "Misc/EngineVersion.h"
 #include "Policies/CondensedJsonPrintPolicy.h"
@@ -279,6 +281,7 @@ TSharedPtr<FJsonObject> FBPExporter::SerializeNode(
 	// the node's full signature is still visible, but they do not each cost an object.
 	TArray<TSharedPtr<FJsonValue>> PinValues;
 	TArray<TSharedPtr<FJsonValue>> UnsetPinNames;
+	bool bHasOverriddenPinValue = false;
 
 	for (UEdGraphPin* Pin : Node->Pins)
 	{
@@ -293,9 +296,12 @@ TSharedPtr<FJsonObject> FBPExporter::SerializeNode(
 			continue;
 		}
 
+		const bool bOverridden = HasOverriddenDefault(Pin, Options);
+		bHasOverriddenPinValue |= bOverridden;
+
 		const bool bCarriesInformation =
 			Pin->LinkedTo.Num() > 0
-			|| HasOverriddenDefault(Pin, Options)
+			|| bOverridden
 			|| Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Exec;
 
 		if (bCarriesInformation || !Options.bCollapseUntouchedPins)
@@ -308,10 +314,22 @@ TSharedPtr<FJsonObject> FBPExporter::SerializeNode(
 		}
 	}
 
-	NodeJson->SetArrayField(TEXT("pins"), PinValues);
-	if (UnsetPinNames.Num() > 0)
+	// A variable getter's pins are its variable (named by the node, typed by the variables list)
+	// plus an optional "self"; a reroute node's are always InputPin and OutputPin. Nothing in
+	// either list has to be written down -- and in a real graph these are a third of the nodes.
+	const bool bPinsAreImplied =
+		Options.bCollapseUntouchedPins
+		&& UnsetPinNames.Num() + PinValues.Num() > 0
+		&& (Node->IsA<UK2Node_VariableGet>() || Node->IsA<UK2Node_Knot>())
+		&& !bHasOverriddenPinValue;
+
+	if (!bPinsAreImplied)
 	{
-		NodeJson->SetArrayField(TEXT("unset_pins"), UnsetPinNames);
+		NodeJson->SetArrayField(TEXT("pins"), PinValues);
+		if (UnsetPinNames.Num() > 0)
+		{
+			NodeJson->SetArrayField(TEXT("unset_pins"), UnsetPinNames);
+		}
 	}
 
 	return NodeJson;
@@ -669,6 +687,9 @@ FString FBPExporter::BuildPromptPrefix(UBlueprint* Blueprint, const FBPExportOpt
 	Prefix += TEXT("only overridden values are listed.\n");
 	Prefix += TEXT("- \"unset_pins\" lists, by name only, the pins that are neither connected nor ");
 	Prefix += TEXT("overridden. They exist and can be connected to or given a value like any other.\n");
+	Prefix += TEXT("- A variable getter or reroute node has no \"pins\" array because its pins are ");
+	Prefix += TEXT("implied: a getter exposes its variable plus an optional \"self\", a reroute node ");
+	Prefix += TEXT("\"InputPin\" and \"OutputPin\". Connections name them normally.\n");
 	Prefix += TEXT("- Blueprint-scope variables are listed once at the top level; a graph's \"variables\" ");
 	Prefix += TEXT("array holds that graph's local variables only. Either is omitted when empty.\n");
 	Prefix += TEXT("- A graph's \"comments\" array is the author's own labelling: each entry names a region ");
