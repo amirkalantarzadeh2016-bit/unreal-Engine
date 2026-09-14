@@ -357,15 +357,71 @@ struct MINIMAP_API FMinimapProjectionContext
 	}
 };
 
+/**
+ * Built-in marker shapes, rasterised by the plugin at runtime.
+ *
+ * These exist so a marker ALWAYS has a sensible icon. The plugin ships no texture assets,
+ * so without them an unset Icon left the widget showing whatever placeholder brush it was
+ * authored with - which is how an unrelated engine placeholder ends up on the map.
+ *
+ * Each is drawn white with a dark rim. UMG tints by multiplying, so the white fill takes
+ * the marker's Tint while the rim stays dark and keeps the shape readable over both light
+ * and dark maps.
+ */
+UENUM(BlueprintType)
+enum class EMinimapMarkerShape : uint8
+{
+	/** Solid dot. The neutral default: reads at small sizes and has no orientation. */
+	Circle		UMETA(DisplayName = "Circle (Dot)"),
+
+	/** Hollow circle. Good for objectives and areas, distinct from a solid dot. */
+	Ring		UMETA(DisplayName = "Ring"),
+
+	/** Chevron pointing up. Use with bUseActorYaw, or as an out-of-bounds arrow. */
+	Arrow		UMETA(DisplayName = "Arrow (Chevron)"),
+
+	Square		UMETA(DisplayName = "Square"),
+
+	Diamond		UMETA(DisplayName = "Diamond"),
+
+	/** Two crossed bars. Reads clearly as a point of interest. */
+	Cross		UMETA(DisplayName = "Cross")
+};
+
 /** Visual description of a marker. Pure data; the widget layer decides how to use it. */
 USTRUCT(BlueprintType)
 struct MINIMAP_API FMinimapMarkerStyle
 {
 	GENERATED_BODY()
 
-	/** Icon drawn while the marker is inside the map. */
+	/**
+	 * Icon drawn while the marker is inside the map.
+	 *
+	 * Leave it empty and the plugin draws FallbackShape instead, so a marker is never
+	 * without an icon. Resolution order is: this texture, then the project-wide default
+	 * icon from the preset, then the generated shape.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Style")
 	TObjectPtr<UTexture2D> Icon = nullptr;
+
+	/** Shape drawn when no Icon is set. Circle is the neutral choice. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Style")
+	EMinimapMarkerShape FallbackShape = EMinimapMarkerShape::Circle;
+
+	/**
+	 * Shape used while clamped to the edge, when no OutOfBoundsIcon is set. An Arrow
+	 * pointing at the target is almost always what you want here.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Style")
+	EMinimapMarkerShape OutOfBoundsFallbackShape = EMinimapMarkerShape::Arrow;
+
+	/**
+	 * Fall back to a generated shape when no texture is set. Turn this OFF only if you
+	 * deliberately drive the widget's brush yourself - with it off, an unset Icon leaves
+	 * whatever brush the widget was authored with, placeholder included.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Style")
+	bool bUseGeneratedIconWhenUnset = true;
 
 	/** Optional distinct icon (usually an arrow) drawn while clamped to the edge. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Style")

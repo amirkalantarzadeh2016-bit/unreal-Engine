@@ -115,6 +115,21 @@ The tracked component's own delegates still report the **primary view only**, be
 marker has a different position in every view. For a secondary view, bind
 `OnMinimapViewUpdated`.
 
+## A marker shows the wrong icon (a placeholder, an unrelated image)
+
+The marker had no icon, and the code left the brush untouched — so whatever the Image was
+authored with stayed on screen. Markers now always resolve to *something*:
+per-marker icon → preset default → generated shape.
+
+If you still see a stray image:
+
+- `Style.bUseGeneratedIconWhenUnset` is off. Turn it on, or set `Style.Icon`.
+- Your `WBP_MinimapMarker`'s `IconImage` has an authored brush AND the marker sets an icon
+  that failed to load. Check `LogMinimap` for the one-shot warning naming the owning actor.
+
+For one consistent look across a project, set `DefaultMarkerIcon` on the preset rather than
+setting `Style.Icon` on every marker.
+
 ## Marker priority
 
 The subsystem sorts snapshots **priority-ascending** and trims from the front, so the most

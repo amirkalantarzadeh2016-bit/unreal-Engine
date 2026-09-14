@@ -245,6 +245,30 @@ public:
 	static float GetCaptureOrthoWidth(const FMinimapCalibration& Calibration);
 
 	// ---------------------------------------------------------------------
+	// Generated marker icons
+	// ---------------------------------------------------------------------
+
+	/**
+	 * Rasterise one of the built-in marker shapes into a transient texture.
+	 *
+	 * The plugin ships no texture assets, so this is what guarantees a marker always has a
+	 * usable icon rather than falling back to whatever brush a widget was authored with.
+	 *
+	 * The shape is drawn WHITE with a dark rim. UMG tints by multiplying, so the fill takes
+	 * the marker's Tint while the rim stays dark and keeps the shape legible over both
+	 * light and dark maps. Coverage is 4x4 supersampled, so edges are smooth at any size.
+	 *
+	 * ALLOCATES a texture on every call - go through UMinimapSubsystem::GetMarkerShapeIcon,
+	 * which caches one per shape and size for the whole world.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Icons")
+	static UTexture2D* CreateMarkerShapeTexture(
+		EMinimapMarkerShape Shape,
+		int32 PixelSize = 64,
+		float OutlineThickness = 0.10f,
+		FLinearColor OutlineColor = FLinearColor(0.02f, 0.02f, 0.04f, 1.0f));
+
+	// ---------------------------------------------------------------------
 	// Asset loading
 	// ---------------------------------------------------------------------
 

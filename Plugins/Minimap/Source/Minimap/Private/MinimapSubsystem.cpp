@@ -1,6 +1,7 @@
 #include "MinimapSubsystem.h"
 
 #include "Engine/Engine.h"
+#include "Engine/Texture2D.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
@@ -67,6 +68,8 @@ void UMinimapSubsystem::Deinitialize()
 	BoundsVolumes.Reset();
 	BackgroundProvider.Reset();
 	StaticBackgroundTexture = nullptr;
+	ShapeIconCache.Reset();
+	DefaultMarkerIcon = nullptr;
 
 	Super::Deinitialize();
 }
@@ -864,4 +867,54 @@ void UMinimapSubsystem::NotifyMinimapContentReady()
 	{
 		UE_LOG(LogMinimap, Warning, TEXT("NotifyMinimapContentReady: %s"), *Reason);
 	}
+}
+
+
+// ---------------------------------------------------------------------------
+// Marker icons
+// ---------------------------------------------------------------------------
+
+UTexture2D* UMinimapSubsystem::GetMarkerShapeIcon(EMinimapMarkerShape Shape, int32 PixelSize)
+{
+	const int32 Size = FMath::Clamp(PixelSize, 8, 512);
+
+	// Shape in the high bits, size in the low bits: one cache entry per distinct icon, so
+	// a hundred markers sharing a shape share a single texture.
+	const uint32 Key = (static_cast<uint32>(Shape) << 16) | static_cast<uint32>(Size);
+
+	if (TObjectPtr<UTexture2D>* Existing = ShapeIconCache.Find(Key))
+	{
+		if (IsValid(*Existing))
+		{
+			return *Existing;
+		}
+		ShapeIconCache.Remove(Key);
+	}
+
+	UTexture2D* Generated = UMinimapFunctionLibrary::CreateMarkerShapeTexture(Shape, Size);
+	if (Generated)
+	{
+		ShapeIconCache.Add(Key, Generated);
+	}
+	return Generated;
+}
+
+void UMinimapSubsystem::SetDefaultMarkerIcon(UTexture2D* Icon)
+{
+	DefaultMarkerIcon = Icon;
+}
+
+UTexture2D* UMinimapSubsystem::ResolveMarkerIcon(UTexture2D* ExplicitIcon, EMinimapMarkerShape FallbackShape, int32 PixelSize)
+{
+	if (IsValid(ExplicitIcon))
+	{
+		return ExplicitIcon;
+	}
+
+	if (IsValid(DefaultMarkerIcon))
+	{
+		return DefaultMarkerIcon;
+	}
+
+	return GetMarkerShapeIcon(FallbackShape, PixelSize);
 }

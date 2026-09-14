@@ -3,7 +3,10 @@
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
 #include "MinimapCaptureTypes.h"
+#include "MinimapTypes.h"
 #include "MinimapPresetAsset.generated.h"
+
+class UTexture2D;
 
 /**
  * Portable minimap configuration, shareable across levels and projects.
@@ -18,6 +21,20 @@ class MINIMAP_API UMinimapPresetAsset : public UPrimaryDataAsset
 	GENERATED_BODY()
 
 public:
+	/**
+	 * Project-wide default marker icon. Every marker that sets no Icon of its own uses
+	 * this, so a whole project gets one consistent marker look from a single asset.
+	 *
+	 * Leave it empty to use the generated shapes instead - the plugin ships no texture
+	 * assets, so the generated shapes are what make markers work out of the box.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Preset|Markers")
+	TObjectPtr<UTexture2D> DefaultMarkerIcon;
+
+	/** Shape used when neither a marker icon nor DefaultMarkerIcon is set. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Preset|Markers")
+	EMinimapMarkerShape DefaultMarkerShape = EMinimapMarkerShape::Circle;
+
 	/** Background source, resolution, height policy, refresh policy, exclusion tags, look. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap|Preset")
 	FMinimapCaptureSettings CaptureSettings;

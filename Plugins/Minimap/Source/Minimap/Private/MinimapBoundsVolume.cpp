@@ -215,6 +215,13 @@ bool AMinimapBoundsVolume::ApplyCalibration()
 	UE_LOG(LogMinimap, Log, TEXT("'%s': calibration applied to the minimap subsystem."), *GetName());
 	bCalibrationAppliedThisPlay = true;
 
+	// One preset asset then gives every marker in the project the same look. Null is fine
+	// and expected - markers fall through to the generated shapes.
+	if (IsValid(Preset))
+	{
+		Subsystem->SetDefaultMarkerIcon(Preset->DefaultMarkerIcon);
+	}
+
 	// Static mode: publish the authored texture through the SAME channel the capture uses,
 	// so both sources are previewable and the widget has one code path. Leaving
 	// StaticMapTexture empty preserves the original behaviour exactly - the widget simply

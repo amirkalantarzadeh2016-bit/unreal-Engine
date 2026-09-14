@@ -31,6 +31,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap")
 	bool bRotateToEdgeAngleWhenOutOfBounds = true;
 
+	/**
+	 * Pixel resolution of generated shape icons. 64 is crisp for the usual 16-32 slate
+	 * unit marker; raise it only if you draw markers much larger.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Minimap",
+		meta = (ClampMin = "8", ClampMax = "512"))
+	int32 GeneratedIconResolution = 64;
+
 	/** Push a freshly computed snapshot into this widget. */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Minimap")
 	void OnMarkerUpdated(const FMinimapMarkerSnapshot& Snapshot);
@@ -49,4 +57,7 @@ public:
 
 private:
 	TWeakObjectPtr<UMinimapTrackedComponent> BoundMarker;
+
+	/** Latched so a marker with no resolvable icon warns once, not every update. */
+	bool bWarnedMissingIcon = false;
 };

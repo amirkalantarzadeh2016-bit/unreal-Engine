@@ -165,8 +165,11 @@ Lives on the preset, or on `CaptureSettingsOverride` per instance.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `Style.Icon` | none | Texture drawn in bounds. |
-| `Style.OutOfBoundsIcon` | none | Optional distinct icon (usually an arrow) while clamped. |
+| `Style.Icon` | none | Texture drawn in bounds. **Optional** — see icon resolution below. |
+| `Style.OutOfBoundsIcon` | none | Optional distinct icon while clamped. Falls back to the arrow shape. |
+| `Style.FallbackShape` | **Circle** | Generated shape used when no Icon is set: Circle, Ring, Arrow, Square, Diamond, Cross. |
+| `Style.OutOfBoundsFallbackShape` | **Arrow** | Generated shape used while clamped to the edge. |
+| `Style.bUseGeneratedIconWhenUnset` | **true** | ⚠️ Turn this off and an unset Icon leaves the widget's authored brush in place — including any placeholder sitting in that Image. |
 | `Style.Tint` / `Style.IconSize` | white / 24×24 | Appearance. |
 | `Style.MarkerWidgetClass` | none | Per-marker widget override. |
 | `Priority` | **0** | Higher draws on top and survives the budget first. |
@@ -182,6 +185,22 @@ Lives on the preset, or on `CaptureSettingsOverride` per instance.
 | `bAllowIndividualTick` | **false** | Almost never needed — the subsystem batches every marker. |
 
 ---
+
+### Marker icon resolution
+
+The plugin ships **no texture assets**, so icons resolve in this order:
+
+1. `Style.Icon` (or `Style.OutOfBoundsIcon` while clamped) — per-marker override
+2. `UMinimapPresetAsset::DefaultMarkerIcon` — one asset gives the whole project a
+   consistent look
+3. **A generated shape**, rasterised by the plugin at runtime
+
+Generated shapes are drawn white with a dark rim, cached per shape and size in the
+subsystem so every marker sharing a shape shares one texture. UMG tints by multiplying, so
+the fill takes `Style.Tint` while the rim stays dark and keeps the shape readable over both
+light and dark maps.
+
+`UMinimapWidgetBase` markers use `GeneratedIconResolution` (default 64 px) for these.
 
 ## Widget — `UMinimapWidgetBase`
 

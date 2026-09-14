@@ -1,6 +1,7 @@
 #include "MinimapFunctionLibrary.h"
 
 #include "Engine/Texture2D.h"
+#include "TextureResource.h"
 #include "MinimapModule.h"
 
 // ---------------------------------------------------------------------------
@@ -431,5 +432,159 @@ UTexture2D* UMinimapFunctionLibrary::LoadTextureByPath(const FString& FullObject
 			     "the plugin's Content folder is present and cooked for this build."), *ObjectPath);
 	}
 
+	return Texture;
+}
+
+
+// ---------------------------------------------------------------------------
+// Generated marker icons
+// ---------------------------------------------------------------------------
+
+namespace MinimapIconShapes
+{
+	/**
+	 * Is a point inside the shape, in normalised coordinates where the icon spans
+	 * [-1, 1] on both axes? Scale shrinks the shape so the same function serves both the
+	 * fill and the slightly larger outline pass.
+	 */
+	static bool IsInside(EMinimapMarkerShape Shape, float X, float Y, float Scale)
+	{
+		switch (Shape)
+		{
+		case EMinimapMarkerShape::Circle:
+			return (X * X + Y * Y) <= (Scale * Scale);
+
+		case EMinimapMarkerShape::Ring:
+			{
+				const float DistSq = X * X + Y * Y;
+				const float Inner = Scale * 0.52f;
+				return DistSq <= (Scale * Scale) && DistSq >= (Inner * Inner);
+			}
+
+		case EMinimapMarkerShape::Square:
+			return FMath::Max(FMath::Abs(X), FMath::Abs(Y)) <= Scale;
+
+		case EMinimapMarkerShape::Diamond:
+			return (FMath::Abs(X) + FMath::Abs(Y)) <= Scale;
+
+		case EMinimapMarkerShape::Cross:
+			{
+				const float Arm = Scale * 0.30f;
+				return (FMath::Abs(X) <= Arm && FMath::Abs(Y) <= Scale)
+					|| (FMath::Abs(Y) <= Arm && FMath::Abs(X) <= Scale);
+			}
+
+		case EMinimapMarkerShape::Arrow:
+			{
+				// Chevron pointing UP (screen -Y), with a notched tail so it reads as a
+				// direction rather than a plain triangle at small sizes.
+				if (Y > Scale * 0.85f || Y < -Scale)
+				{
+					return false;
+				}
+				// Widen linearly from the apex down to the tail.
+				const float Alpha = (Y + Scale) / (Scale * 1.85f);          // 0 at apex
+				const float HalfWidth = FMath::Lerp(0.0f, Scale * 0.85f, Alpha);
+				if (FMath::Abs(X) > HalfWidth)
+				{
+					return false;
+				}
+				// Notch: cut a smaller inverted wedge out of the tail.
+				const float NotchTop = Scale * 0.15f;
+				if (Y > NotchTop)
+				{
+					const float NotchAlpha = (Y - NotchTop) / (Scale * 0.85f - NotchTop);
+					if (FMath::Abs(X) < FMath::Lerp(0.0f, Scale * 0.45f, NotchAlpha))
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+
+		default:
+			return (X * X + Y * Y) <= (Scale * Scale);
+		}
+	}
+
+	/** Fraction of a pixel covered by the shape, 4x4 supersampled. */
+	static float Coverage(EMinimapMarkerShape Shape, int32 PX, int32 PY, int32 Size, float Scale)
+	{
+		constexpr int32 Samples = 4;
+		int32 Hits = 0;
+
+		for (int32 SY = 0; SY < Samples; ++SY)
+		{
+			for (int32 SX = 0; SX < Samples; ++SX)
+			{
+				// Sample at sub-pixel centres, mapped to [-1, 1].
+				const float U = ((PX + (SX + 0.5f) / Samples) / Size) * 2.0f - 1.0f;
+				const float V = ((PY + (SY + 0.5f) / Samples) / Size) * 2.0f - 1.0f;
+				if (IsInside(Shape, U, V, Scale))
+				{
+					++Hits;
+				}
+			}
+		}
+
+		return static_cast<float>(Hits) / (Samples * Samples);
+	}
+}
+
+UTexture2D* UMinimapFunctionLibrary::CreateMarkerShapeTexture(
+	EMinimapMarkerShape Shape, int32 PixelSize, float OutlineThickness, FLinearColor OutlineColor)
+{
+	const int32 Size = FMath::Clamp(PixelSize, 8, 512);
+	const float Outline = FMath::Clamp(OutlineThickness, 0.0f, 0.4f);
+
+	// The outline pass draws the shape slightly larger; the fill pass draws it inset by the
+	// outline thickness, and the difference between the two is the rim.
+	const float OuterScale = 0.94f;
+	const float InnerScale = FMath::Max(OuterScale - Outline, 0.05f);
+
+	TArray<FColor> Pixels;
+	Pixels.SetNumUninitialized(Size * Size);
+
+	for (int32 Y = 0; Y < Size; ++Y)
+	{
+		for (int32 X = 0; X < Size; ++X)
+		{
+			const float Outer = MinimapIconShapes::Coverage(Shape, X, Y, Size, OuterScale);
+			const float Fill  = MinimapIconShapes::Coverage(Shape, X, Y, Size, InnerScale);
+
+			// Alpha is the outer silhouette; colour blends from rim to fill. Keeping the
+			// fill pure white is what lets a single texture serve every marker tint.
+			const float FillRatio = (Outer > UE_KINDA_SMALL_NUMBER) ? (Fill / Outer) : 0.0f;
+			const FLinearColor Blended = FMath::Lerp(OutlineColor, FLinearColor::White, FillRatio);
+
+			FColor& Out = Pixels[Y * Size + X];
+			Out.R = static_cast<uint8>(FMath::Clamp(Blended.R, 0.0f, 1.0f) * 255.0f + 0.5f);
+			Out.G = static_cast<uint8>(FMath::Clamp(Blended.G, 0.0f, 1.0f) * 255.0f + 0.5f);
+			Out.B = static_cast<uint8>(FMath::Clamp(Blended.B, 0.0f, 1.0f) * 255.0f + 0.5f);
+			Out.A = static_cast<uint8>(FMath::Clamp(Outer, 0.0f, 1.0f) * 255.0f + 0.5f);
+		}
+	}
+
+	UTexture2D* Texture = UTexture2D::CreateTransient(Size, Size, PF_B8G8R8A8);
+	if (!Texture)
+	{
+		UE_LOG(LogMinimap, Warning, TEXT("CreateMarkerShapeTexture: could not create a %dx%d texture."), Size, Size);
+		return nullptr;
+	}
+
+	Texture->SRGB = true;
+	Texture->Filter = TF_Bilinear;
+	Texture->AddressX = TA_Clamp;
+	Texture->AddressY = TA_Clamp;
+	Texture->NeverStream = true;
+	Texture->CompressionSettings = TC_EditorIcon;
+
+	// FColor is B,G,R,A in memory, matching PF_B8G8R8A8 with no shuffling.
+	FTexture2DMipMap& Mip = Texture->GetPlatformData()->Mips[0];
+	void* Data = Mip.BulkData.Lock(LOCK_READ_WRITE);
+	FMemory::Memcpy(Data, Pixels.GetData(), Pixels.Num() * sizeof(FColor));
+	Mip.BulkData.Unlock();
+
+	Texture->UpdateResource();
 	return Texture;
 }

@@ -11,6 +11,7 @@ class UMinimapCaptureComponent;
 class UMinimapTrackedComponent;
 class UMinimapViewComponent;
 class UTexture;
+class UTexture2D;
 class UTextureRenderTarget2D;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnMinimapCalibrationChanged, const FMinimapCalibration&, NewCalibration);
@@ -196,6 +197,40 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Minimap|Background")
 	void SetStaticBackgroundTexture(UTexture* StaticTexture);
 
+	// ---------------------------------------------------------------------
+	// Marker icons
+	// ---------------------------------------------------------------------
+
+	/**
+	 * A generated icon for one of the built-in shapes, cached per shape and size for the
+	 * whole world so every marker using the same shape shares one texture.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Icons")
+	UTexture2D* GetMarkerShapeIcon(EMinimapMarkerShape Shape, int32 PixelSize = 64);
+
+	/**
+	 * Project-wide default marker icon, normally pushed from the preset. Markers that set
+	 * no Icon of their own use this, which is how a whole project gets one consistent
+	 * marker look from a single asset.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Icons")
+	void SetDefaultMarkerIcon(UTexture2D* Icon);
+
+	UFUNCTION(BlueprintPure, Category = "Minimap|Icons")
+	UTexture2D* GetDefaultMarkerIcon() const { return DefaultMarkerIcon; }
+
+	/**
+	 * The single icon-resolution rule, in priority order:
+	 *   1. the marker's own Icon;
+	 *   2. the project-wide default icon;
+	 *   3. a generated shape.
+	 *
+	 * Never returns null unless texture creation itself fails, which is what stops an
+	 * unset icon leaving a widget's authored placeholder brush on screen.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "Minimap|Icons")
+	UTexture2D* ResolveMarkerIcon(UTexture2D* ExplicitIcon, EMinimapMarkerShape FallbackShape, int32 PixelSize = 64);
+
 	/** Fired when the background texture becomes available or is replaced. */
 	UPROPERTY(BlueprintAssignable, Category = "Minimap|Events")
 	FOnMinimapBackgroundTextureChanged OnBackgroundTextureChanged;
@@ -293,6 +328,14 @@ private:
 	/** Authored texture published in Static Texture mode. Null when capture drives it. */
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture> StaticBackgroundTexture;
+
+	/** Generated shape icons, keyed by shape and pixel size. UPROPERTY keeps them alive. */
+	UPROPERTY(Transient)
+	TMap<uint32, TObjectPtr<UTexture2D>> ShapeIconCache;
+
+	/** Project-wide default, normally supplied by the preset. */
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> DefaultMarkerIcon;
 
 	FName RequiredBoundsTag = NAME_None;
 
