@@ -3,6 +3,10 @@
 #include "Data/ArchTimeCalendar.h"
 #include "Util/ArchJalaliCalendar.h"
 
+// Internationalization.h only forward-declares FCulture (through CulturePointer.h).
+// Culture.h is what defines it, and GetCurrentCulture()->GetName() needs the
+// complete type.
+#include "Internationalization/Culture.h"
 #include "Internationalization/Internationalization.h"
 #include "Misc/AutomationTest.h"
 #include "Misc/ScopeExit.h"
