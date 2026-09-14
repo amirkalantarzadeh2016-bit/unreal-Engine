@@ -3,6 +3,9 @@
 #include "BlueprintAIBridgeModule.h"
 
 #include "SBPAIBridgePanel.h"
+#include "Engine/Blueprint.h"
+#include "Toolkits/AssetEditorToolkit.h"
+#include "Toolkits/AssetEditorToolkitMenuContext.h"
 #include "ToolMenus.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Framework/Docking/TabManager.h"
@@ -29,9 +32,13 @@ void FBlueprintAIBridgeModule::StartupModule()
 		.SetGroup(WorkspaceMenu::GetMenuStructure().GetDeveloperToolsMiscCategory())
 		.SetIcon(FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.Blueprint"));
 
-	// UToolMenus is not necessarily up yet at PostEngineInit, so defer the menu entry.
+	// UToolMenus is not necessarily up yet at PostEngineInit, so defer both registrations.
 	UToolMenus::RegisterStartupCallback(
-		FSimpleMulticastDelegate::FDelegate::CreateRaw(this, &FBlueprintAIBridgeModule::RegisterMenuEntry));
+		FSimpleMulticastDelegate::FDelegate::CreateLambda([this]()
+		{
+			RegisterToolsMenuEntry();
+			RegisterAssetEditorToolbars();
+		}));
 }
 
 void FBlueprintAIBridgeModule::ShutdownModule()
@@ -50,14 +57,40 @@ void FBlueprintAIBridgeModule::ShutdownModule()
 
 TSharedRef<SDockTab> FBlueprintAIBridgeModule::SpawnTab(const FSpawnTabArgs& Args)
 {
+	TSharedRef<SBPAIBridgePanel> Panel = SNew(SBPAIBridgePanel);
+	ActivePanel = Panel;
+
 	return SNew(SDockTab)
 		.TabRole(ETabRole::NomadTab)
 		[
-			SNew(SBPAIBridgePanel)
+			Panel
 		];
 }
 
-void FBlueprintAIBridgeModule::RegisterMenuEntry()
+void FBlueprintAIBridgeModule::OpenPanel(UBlueprint* Blueprint)
+{
+	// Invoking the tab spawns the panel when there is not one already, and ActivePanel is set
+	// from inside SpawnTab, so by the time this returns the pointer is good either way.
+	FGlobalTabmanager::Get()->TryInvokeTab(TabName);
+
+	if (Blueprint == nullptr)
+	{
+		return;
+	}
+
+	if (TSharedPtr<SBPAIBridgePanel> Panel = ActivePanel.Pin())
+	{
+		Panel->SetBlueprint(Blueprint);
+	}
+	else
+	{
+		UE_LOG(LogBlueprintAIBridge, Warning,
+			TEXT("Opened the panel but could not reach it to select '%s'; pick it in the panel instead."),
+			*Blueprint->GetName());
+	}
+}
+
+void FBlueprintAIBridgeModule::RegisterToolsMenuEntry()
 {
 	FToolMenuOwnerScoped OwnerScoped(this);
 
@@ -77,10 +110,74 @@ void FBlueprintAIBridgeModule::RegisterMenuEntry()
 		LOCTEXT("MenuEntryLabel", "Blueprint AI Bridge"),
 		LOCTEXT("MenuEntryTooltip", "Open the Blueprint AI Bridge panel."),
 		FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.Blueprint"),
-		FUIAction(FExecuteAction::CreateLambda([]()
+		FUIAction(FExecuteAction::CreateRaw(this, &FBlueprintAIBridgeModule::OpenPanel, static_cast<UBlueprint*>(nullptr))));
+}
+
+void FBlueprintAIBridgeModule::RegisterAssetEditorToolbars()
+{
+	FToolMenuOwnerScoped OwnerScoped(this);
+
+	// The asset editors whose toolbars are worth carrying the button. Extending a menu that
+	// does not exist in this editor build is harmless -- the entry simply never renders.
+	static const TCHAR* ToolbarMenus[] = {
+		TEXT("AssetEditor.BlueprintEditor.ToolBar"),
+		TEXT("AssetEditor.WidgetBlueprintEditor.ToolBar")
+	};
+
+	for (const TCHAR* MenuName : ToolbarMenus)
+	{
+		UToolMenu* Toolbar = UToolMenus::Get()->ExtendMenu(FName(MenuName));
+		if (Toolbar == nullptr)
 		{
-			FGlobalTabmanager::Get()->TryInvokeTab(FBlueprintAIBridgeModule::TabName);
-		})));
+			continue;
+		}
+
+		FToolMenuSection& Section = Toolbar->FindOrAddSection(
+			TEXT("BlueprintAIBridge"),
+			LOCTEXT("ToolbarSection", "AI"));
+
+		FToolUIAction Action;
+		Action.ExecuteAction = FToolMenuExecuteAction::CreateRaw(
+			this, &FBlueprintAIBridgeModule::OpenPanelFromToolbar);
+
+		Section.AddEntry(FToolMenuEntry::InitToolBarButton(
+			TEXT("OpenBlueprintAIBridge"),
+			Action,
+			LOCTEXT("ToolbarLabel", "AI Bridge"),
+			LOCTEXT("ToolbarTooltip", "Open the Blueprint AI Bridge on this Blueprint."),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.Blueprint")));
+	}
+}
+
+void FBlueprintAIBridgeModule::OpenPanelFromToolbar(const FToolMenuContext& Context)
+{
+	// The asset editor puts its toolkit in the menu context; the Blueprint it is editing is
+	// what the developer means by "this one". If any of that is unavailable the panel still
+	// opens -- they just pick the asset themselves, as before.
+	UBlueprint* Blueprint = nullptr;
+
+	if (UAssetEditorToolkitMenuContext* ToolkitContext = Context.FindContext<UAssetEditorToolkitMenuContext>())
+	{
+		if (TSharedPtr<FAssetEditorToolkit> Toolkit = ToolkitContext->Toolkit.Pin())
+		{
+			for (UObject* EditedObject : Toolkit->GetEditingObjects())
+			{
+				if (UBlueprint* Candidate = Cast<UBlueprint>(EditedObject))
+				{
+					Blueprint = Candidate;
+					break;
+				}
+			}
+		}
+	}
+
+	if (Blueprint == nullptr)
+	{
+		UE_LOG(LogBlueprintAIBridge, Verbose,
+			TEXT("Toolbar button could not determine the Blueprint being edited; opening the panel unselected."));
+	}
+
+	OpenPanel(Blueprint);
 }
 
 #undef LOCTEXT_NAMESPACE

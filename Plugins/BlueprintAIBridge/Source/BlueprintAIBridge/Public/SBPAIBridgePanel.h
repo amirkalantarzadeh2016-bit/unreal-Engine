@@ -31,6 +31,14 @@ public:
 
 	void Construct(const FArguments& InArgs);
 
+	/**
+	 * Points the panel at a Blueprint, as though it had been chosen in the picker.
+	 *
+	 * Called when the panel is opened from a Blueprint editor's own toolbar, so the developer
+	 * does not have to find in a picker the asset they already have open.
+	 */
+	void SetBlueprint(UBlueprint* Blueprint);
+
 private:
 	// ---- State -------------------------------------------------------------------------
 	TWeakObjectPtr<UBlueprint> SelectedBlueprint;

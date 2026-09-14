@@ -5,7 +5,11 @@ AI's suggested changes back into the asset behind a reviewable diff.
 
 ## Workflow
 
-1. Open **Tools > Blueprint AI Bridge** (or Window > Developer Tools > Blueprint AI Bridge).
+1. Open the panel from either place:
+   - **AI Bridge** on the toolbar of any Blueprint or Widget Blueprint editor. This selects the
+     Blueprint you already have open, so step 2's picker is done for you.
+   - **Tools > Blueprint AI Bridge** (or Window > Developer Tools > Blueprint AI Bridge), for
+     when no Blueprint editor is open.
 2. Pick a Blueprint, pick a context (Bug Fix / Refactor / Feature Request / Code Review /
    General) and an export scope (all graphs, or one graph at a time for large assets).
 3. **Export for AI** writes a snapshot to `Saved/BlueprintAIBridge/Snapshots/`.

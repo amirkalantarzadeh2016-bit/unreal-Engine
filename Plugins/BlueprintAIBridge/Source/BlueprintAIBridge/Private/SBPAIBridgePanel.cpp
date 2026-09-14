@@ -467,7 +467,12 @@ FString SBPAIBridgePanel::GetBlueprintPath() const
 
 void SBPAIBridgePanel::OnBlueprintChanged(const FAssetData& AssetData)
 {
-	SelectedBlueprint = Cast<UBlueprint>(AssetData.GetAsset());
+	SetBlueprint(Cast<UBlueprint>(AssetData.GetAsset()));
+}
+
+void SBPAIBridgePanel::SetBlueprint(UBlueprint* Blueprint)
+{
+	SelectedBlueprint = Blueprint;
 
 	// A different Blueprint invalidates everything downstream of the export.
 	LastExportJson.Reset();
