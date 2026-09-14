@@ -213,9 +213,20 @@ struct ARCHSKYRUNTIME_API FArchWeatherParams
 
 	// --- Post process --------------------------------------------------------------------
 
-	/** Exposure bias in stops. Overcast presets usually want a small negative value. */
+	/**
+	 * Exposure bias, in STOPS (equivalently, exposure values). Overcast presets usually
+	 * want a small negative value.
+	 *
+	 * ARCH NOTE: deliberately carries no Units metadata. The Units key is validated against
+	 * the engine's EUnit enum, which has no member for stops or exposure values - the unit
+	 * is simply not in the table. The engine's own equivalent property,
+	 * FPostProcessSettings::AutoExposureBias, likewise declares no Units for exactly this
+	 * reason. Do not add one: any value here is a guess, and a wrong guess fails UnrealHeaderTool
+	 * before a single .cpp is compiled. The unit belongs in this comment and in the tooltip.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Post Process",
-		meta = (ClampMin = "-5.0", ClampMax = "5.0", UIMin = "-3.0", UIMax = "3.0", Units = "ExposureValue"))
+		meta = (ClampMin = "-5.0", ClampMax = "5.0", UIMin = "-3.0", UIMax = "3.0",
+			ToolTip = "Exposure bias in stops. Negative darkens."))
 	float ExposureCompensation = 0.f;
 
 	/** Multiplier on bloom intensity. Hazy and dusty presets raise it. */
