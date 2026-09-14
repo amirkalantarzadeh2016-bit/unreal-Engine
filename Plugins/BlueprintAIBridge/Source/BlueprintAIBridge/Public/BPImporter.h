@@ -144,6 +144,31 @@ private:
 	/** Best-effort mapping from an exported type string back to a pin type. */
 	static bool ParseTypeString(const FString& TypeString, FEdGraphPinType& OutPinType);
 
-	/** Free slot to drop a newly spawned node into, so additions do not stack on the origin. */
-	static void PlaceNode(UEdGraph* Graph, UEdGraphNode* Node, int32 SpawnIndex);
+	/**
+	 * Positions a newly spawned node next to whatever it ended up wired to.
+	 *
+	 * Must run after connections are applied: before that a new node has no neighbours and the
+	 * only honest place to put it is a column off the side of the graph, which on a large asset
+	 * is nowhere near the logic it belongs to.
+	 *
+	 * @param StillUnplaced  new nodes that have no position yet, so they are not treated as
+	 *                       neighbours or as obstacles.
+	 */
+	static void PlaceSpawnedNode(UEdGraphNode* Node, const TSet<UEdGraphNode*>& StillUnplaced, int32 FallbackIndex);
+
+	/**
+	 * Finds the node a previous run of this same diff already added, if there is one.
+	 *
+	 * Re-applying a file is a normal thing to do -- after an undo, or to check what it does --
+	 * and an "add" that always spawns turns that into a duplicate. An added node has no id in
+	 * the graph to match on, so it is identified by what it is wired to: follow the connections
+	 * this diff wants, and see whether the node on the far end is already the one being asked for.
+	 */
+	static UEdGraphNode* FindAlreadyAppliedNode(
+		const FBPDiffItem& AddItem,
+		const TArray<FBPDiffItem>& AcceptedItems,
+		const TMap<FString, UEdGraphNode*>& NodeIdMap);
+
+	/** True when a live node is the node an "add" entry describes: same class, same reference. */
+	static bool NodeMatchesSpec(UEdGraphNode* Node, TSharedPtr<FJsonObject> NodeJson);
 };

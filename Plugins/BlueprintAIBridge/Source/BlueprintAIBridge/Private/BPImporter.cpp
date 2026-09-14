@@ -3,6 +3,7 @@
 #include "BPImporter.h"
 
 #include "BPExporter.h"
+#include "BPGraphLayoutEngine.h"
 #include "BlueprintAIBridgeModule.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
@@ -159,26 +160,207 @@ UEdGraph* FBPImporter::FindOrCreateGraph(UBlueprint* Blueprint, const FString& G
 	return NewGraph;
 }
 
-void FBPImporter::PlaceNode(UEdGraph* Graph, UEdGraphNode* Node, int32 SpawnIndex)
+void FBPImporter::PlaceSpawnedNode(UEdGraphNode* Node, const TSet<UEdGraphNode*>& StillUnplaced, int32 FallbackIndex)
 {
-	if (Graph == nullptr || Node == nullptr)
+	if (Node == nullptr)
 	{
 		return;
 	}
 
-	// Drop new nodes in a column to the right of everything that already exists, so an import
-	// never buries an added node underneath the graph the developer is looking at.
-	int32 RightEdge = 0;
-	for (UEdGraphNode* Existing : Graph->Nodes)
+	UEdGraph* Graph = Node->GetGraph();
+	if (Graph == nullptr)
 	{
-		if (Existing != nullptr && Existing != Node)
+		return;
+	}
+
+	constexpr float ColumnGap = 80.0f;
+	constexpr float RowGap = 64.0f;
+
+	// Nodes that already have a position. A new node still waiting its turn is neither a useful
+	// anchor nor a real obstacle, since it is sitting at the origin.
+	TArray<UEdGraphNode*> Upstream;
+	TArray<UEdGraphNode*> Downstream;
+
+	for (UEdGraphPin* Pin : Node->Pins)
+	{
+		if (Pin == nullptr)
 		{
-			RightEdge = FMath::Max(RightEdge, Existing->NodePosX + 300);
+			continue;
+		}
+
+		for (UEdGraphPin* Linked : Pin->LinkedTo)
+		{
+			UEdGraphNode* Other = Linked ? Linked->GetOwningNodeUnchecked() : nullptr;
+			if (Other == nullptr || Other == Node || StillUnplaced.Contains(Other))
+			{
+				continue;
+			}
+
+			(Pin->Direction == EGPD_Input ? Upstream : Downstream).Add(Other);
 		}
 	}
 
-	Node->NodePosX = RightEdge + 100;
-	Node->NodePosY = SpawnIndex * 200;
+	const FVector2D Size = FBPGraphLayoutEngine::EstimateNodeSize(Node);
+	FVector2D Position(0.0f, 0.0f);
+
+	if (Upstream.Num() > 0)
+	{
+		// Just right of whatever feeds it, level with the average of those feeds.
+		float Right = -TNumericLimits<float>::Max();
+		float SumY = 0.0f;
+		for (UEdGraphNode* Other : Upstream)
+		{
+			Right = FMath::Max(Right, static_cast<float>(Other->NodePosX) + static_cast<float>(FBPGraphLayoutEngine::EstimateNodeSize(Other).X));
+			SumY += static_cast<float>(Other->NodePosY);
+		}
+		Position = FVector2D(Right + ColumnGap, SumY / Upstream.Num());
+	}
+	else if (Downstream.Num() > 0)
+	{
+		float Left = TNumericLimits<float>::Max();
+		float SumY = 0.0f;
+		for (UEdGraphNode* Other : Downstream)
+		{
+			Left = FMath::Min(Left, static_cast<float>(Other->NodePosX));
+			SumY += static_cast<float>(Other->NodePosY);
+		}
+		Position = FVector2D(Left - ColumnGap - static_cast<float>(Size.X), SumY / Downstream.Num());
+	}
+	else
+	{
+		// Wired to nothing: a column clear of the graph is the only defensible place left.
+		float Right = 0.0f;
+		for (const auto& Element : Graph->Nodes)
+		{
+			UEdGraphNode* Other = Element;
+			if (Other != nullptr && Other != Node)
+			{
+				Right = FMath::Max(Right, static_cast<float>(Other->NodePosX) + 300.0f);
+			}
+		}
+		Position = FVector2D(Right + 100.0f, FallbackIndex * 200.0f);
+	}
+
+	// Slide down out of anything already sitting there, so landing beside a dense chain does not
+	// bury the new node under an existing one.
+	for (int32 Attempt = 0; Attempt < 64; ++Attempt)
+	{
+		bool bClear = true;
+
+		for (const auto& Element : Graph->Nodes)
+		{
+			UEdGraphNode* Other = Element;
+			if (Other == nullptr || Other == Node || StillUnplaced.Contains(Other))
+			{
+				continue;
+			}
+
+			const FVector2D OtherMin(static_cast<float>(Other->NodePosX), static_cast<float>(Other->NodePosY));
+			const FVector2D OtherSize = FBPGraphLayoutEngine::EstimateNodeSize(Other);
+
+			if (Position.X < OtherMin.X + OtherSize.X && Position.X + Size.X > OtherMin.X
+				&& Position.Y < OtherMin.Y + OtherSize.Y && Position.Y + Size.Y > OtherMin.Y)
+			{
+				Position.Y = OtherMin.Y + OtherSize.Y + RowGap;
+				bClear = false;
+				break;
+			}
+		}
+
+		if (bClear)
+		{
+			break;
+		}
+	}
+
+	Node->Modify();
+	Node->NodePosX = FMath::RoundToInt32(Position.X);
+	Node->NodePosY = FMath::RoundToInt32(Position.Y);
+}
+
+bool FBPImporter::NodeMatchesSpec(UEdGraphNode* Node, TSharedPtr<FJsonObject> NodeJson)
+{
+	if (Node == nullptr || !NodeJson.IsValid())
+	{
+		return false;
+	}
+
+	if (Node->GetClass()->GetName() != GetString(NodeJson, TEXT("type")))
+	{
+		return false;
+	}
+
+	// Titles are not compared: an added node is titled by whoever wrote the diff, while the live
+	// node's title comes from the engine. The reference it points at is what makes it the same node.
+	const FString FunctionName = GetString(NodeJson, TEXT("function_name"));
+	if (!FunctionName.IsEmpty())
+	{
+		const UK2Node_CallFunction* CallNode = Cast<UK2Node_CallFunction>(Node);
+		return CallNode != nullptr && CallNode->FunctionReference.GetMemberName() == FName(*FunctionName);
+	}
+
+	const FString VariableName = GetString(NodeJson, TEXT("variable_name"));
+	if (!VariableName.IsEmpty())
+	{
+		const UK2Node_Variable* VariableNode = Cast<UK2Node_Variable>(Node);
+		return VariableNode != nullptr && VariableNode->VariableReference.GetMemberName() == FName(*VariableName);
+	}
+
+	return true;
+}
+
+UEdGraphNode* FBPImporter::FindAlreadyAppliedNode(
+	const FBPDiffItem& AddItem,
+	const TArray<FBPDiffItem>& AcceptedItems,
+	const TMap<FString, UEdGraphNode*>& NodeIdMap)
+{
+	// Every connection this diff wants that touches the new node gives an anchor: a node that
+	// already exists, and the pin the new node should hang off. If something matching the spec
+	// is already on the far end of that pin, the diff has been applied before.
+	for (const FBPDiffItem& Item : AcceptedItems)
+	{
+		if (Item.Type != EBPDiffType::ConnectionAdded || Item.GraphName != AddItem.GraphName || !Item.PayloadJson.IsValid())
+		{
+			continue;
+		}
+
+		const FString FromNode = GetString(Item.PayloadJson, TEXT("from_node"));
+		const FString ToNode = GetString(Item.PayloadJson, TEXT("to_node"));
+
+		const bool bNewNodeIsTarget = (ToNode == AddItem.NodeId);
+		const bool bNewNodeIsSource = (FromNode == AddItem.NodeId);
+		if (bNewNodeIsTarget == bNewNodeIsSource)
+		{
+			// Touches the new node at both ends or neither; neither case yields an anchor.
+			continue;
+		}
+
+		const FString AnchorId = bNewNodeIsTarget ? FromNode : ToNode;
+		const FString AnchorPinName = GetString(Item.PayloadJson, bNewNodeIsTarget ? TEXT("from_pin") : TEXT("to_pin"));
+
+		UEdGraphNode* const* AnchorNode = NodeIdMap.Find(AnchorId);
+		if (AnchorNode == nullptr || *AnchorNode == nullptr)
+		{
+			continue;
+		}
+
+		UEdGraphPin* AnchorPin = ResolvePin(*AnchorNode, AnchorPinName, bNewNodeIsTarget ? EGPD_Output : EGPD_Input);
+		if (AnchorPin == nullptr)
+		{
+			continue;
+		}
+
+		for (UEdGraphPin* Linked : AnchorPin->LinkedTo)
+		{
+			UEdGraphNode* Candidate = Linked ? Linked->GetOwningNodeUnchecked() : nullptr;
+			if (NodeMatchesSpec(Candidate, AddItem.PayloadJson))
+			{
+				return Candidate;
+			}
+		}
+	}
+
+	return nullptr;
 }
 
 bool FBPImporter::ConfigureSpawnedNode(
@@ -521,6 +703,12 @@ void FBPImporter::ApplyConnection(
 
 	if (bAdd)
 	{
+		if (FromPin->LinkedTo.Contains(ToPin))
+		{
+			// Already wired this way, so there is nothing to apply and nothing to report.
+			return;
+		}
+
 		if (!Schema->TryCreateConnection(FromPin, ToPin))
 		{
 			Result.Warnings.Add(FString::Printf(
@@ -862,14 +1050,30 @@ FBPImportResult FBPImporter::ApplyDiff(UBlueprint* Blueprint, const TArray<FBPDi
 		ApplyVariableChange(Blueprint, *Item, Result);
 	}
 
-	// 2. Node additions.
-	int32 SpawnIndex = 0;
+	// 2. Node additions. Positions are left until step 5: a node spawned here has no neighbours
+	// yet, and where it belongs is decided by what it gets wired to.
+	TArray<UEdGraphNode*> SpawnedNodes;
+
 	for (const FBPDiffItem* Item : ItemsOfType({ EBPDiffType::NodeAdded }))
 	{
 		UEdGraph* Graph = GetGraph(Item->GraphName);
 		if (Graph == nullptr)
 		{
 			Result.Warnings.Add(FString::Printf(TEXT("Graph '%s' could not be resolved; node '%s' skipped."), *Item->GraphName, *Item->NodeId));
+			Result.SkippedCount++;
+			continue;
+		}
+
+		TMap<FString, UEdGraphNode*>& IdToNode = GraphNodeMaps.FindOrAdd(Item->GraphName);
+
+		// Applying the same file twice should not build the same node twice. Registering the
+		// existing one under the diff's id makes every connection that names it a no-op.
+		if (UEdGraphNode* Existing = FindAlreadyAppliedNode(*Item, AcceptedItems, IdToNode))
+		{
+			IdToNode.Add(Item->NodeId, Existing);
+			Result.Warnings.Add(FString::Printf(
+				TEXT("'%s' is already in the graph as '%s'; reused it instead of adding a second."),
+				*Item->NodeId, *Existing->GetNodeTitle(ENodeTitleType::ListView).ToString()));
 			Result.SkippedCount++;
 			continue;
 		}
@@ -881,10 +1085,10 @@ FBPImportResult FBPImporter::ApplyDiff(UBlueprint* Blueprint, const TArray<FBPDi
 			continue;
 		}
 
-		PlaceNode(Graph, NewNode, SpawnIndex++);
 		ApplyPinDefaults(NewNode, Item->PayloadJson, Result);
 
-		GraphNodeMaps.FindOrAdd(Item->GraphName).Add(Item->NodeId, NewNode);
+		IdToNode.Add(Item->NodeId, NewNode);
+		SpawnedNodes.Add(NewNode);
 		Result.AppliedCount++;
 	}
 
@@ -946,7 +1150,20 @@ FBPImportResult FBPImporter::ApplyDiff(UBlueprint* Blueprint, const TArray<FBPDi
 		ApplyConnection(Graph, Item->PayloadJson, /*bAdd*/ true, GraphNodeMaps.FindOrAdd(Item->GraphName), Result);
 	}
 
-	// 5. Node deletions.
+	// 5. Position the added nodes, now that it is known what each one hangs off.
+	{
+		TSet<UEdGraphNode*> StillUnplaced(SpawnedNodes);
+		int32 FallbackIndex = 0;
+
+		for (UEdGraphNode* Node : SpawnedNodes)
+		{
+			// Dropped before placing, so a chain of new nodes anchors each one to the last.
+			StillUnplaced.Remove(Node);
+			PlaceSpawnedNode(Node, StillUnplaced, FallbackIndex++);
+		}
+	}
+
+	// 6. Node deletions.
 	for (const FBPDiffItem* Item : ItemsOfType({ EBPDiffType::NodeDeleted }))
 	{
 		UEdGraph* Graph = GetGraph(Item->GraphName);
@@ -971,7 +1188,7 @@ FBPImportResult FBPImporter::ApplyDiff(UBlueprint* Blueprint, const TArray<FBPDi
 		DeleteNodeById(Blueprint, Graph, Item->NodeId, IdToNode, Result);
 	}
 
-	// 6. Remaining variable work.
+	// 7. Remaining variable work.
 	for (const FBPDiffItem* Item : ItemsOfType({ EBPDiffType::VariableModified, EBPDiffType::VariableRemoved }))
 	{
 		ApplyVariableChange(Blueprint, *Item, Result);

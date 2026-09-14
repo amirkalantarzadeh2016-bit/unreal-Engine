@@ -94,6 +94,12 @@ The AI may answer with a delta document (every entry carries an `action`) or wit
 document (no `action` anywhere), which is compared set-wise against the baseline. The full
 schema is documented at the top of `Public/BPImporter.h`.
 
+Added nodes are positioned after their connections are made, next to whatever they ended up
+wired to, sliding down out of anything already occupying the slot. Applying the same file twice
+does not build the same node twice: an added node is matched against what the diff wires it to,
+and an existing match is reused, so a re-run reports its additions as skipped and leaves any
+hand-tidying alone.
+
 Node ids are **positional** — `N1` is the first node in the graph's node array. They are stable
 only while the graph is untouched, so do not edit the Blueprint between exporting and applying.
 The importer checks each targeted node's title against the snapshot and skips anything that no
