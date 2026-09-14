@@ -7,6 +7,7 @@
 
 #include "ArchSkySceneValidator.generated.h"
 
+class AActor;
 class UWorld;
 
 /** How badly a validation finding will hurt. */

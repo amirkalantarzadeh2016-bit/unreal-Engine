@@ -70,12 +70,12 @@ FArchSkyReplicatedState FArchSkyReplicatedState::FromSkyState(const FArchSkyStat
 	FArchSkyReplicatedState Replicated;
 
 	// 24 h * 1000 = 24000, comfortably inside uint16.
-	Replicated.QuantisedTimeOfDay = static_cast<uint16>(FMath::Clamp(
+	Replicated.QuantisedTimeOfDay = FMath::Clamp(
 		FMath::RoundToInt(ArchTimeCalendar::WrapHours(State.TimeOfDayHours) * TimeQuantisationScale),
-		0, 23999));
+		0, 23999);
 
-	Replicated.DayOfYear = static_cast<uint16>(FMath::Clamp(State.DayOfYear, 1, 366));
-	Replicated.Year = static_cast<uint16>(FMath::Clamp(State.Year, 1900, 2200));
+	Replicated.DayOfYear = FMath::Clamp(State.DayOfYear, 1, 366);
+	Replicated.Year = FMath::Clamp(State.Year, 1900, 2200);
 
 	// The clock clamps its own rate to +/-600 h/s, so +/-60000 is the full legal range here
 	// and no further clamping can lose a value a caller could actually have set.
@@ -95,8 +95,8 @@ FArchSkyReplicatedState FArchSkyReplicatedState::FromSkyState(const FArchSkyStat
 void FArchSkyReplicatedState::ApplyToSkyState(FArchSkyState& OutState) const
 {
 	OutState.TimeOfDayHours = GetTimeOfDayHours();
-	OutState.DayOfYear = static_cast<int32>(DayOfYear);
-	OutState.Year = static_cast<int32>(Year);
+	OutState.DayOfYear = DayOfYear;
+	OutState.Year = Year;
 	OutState.TimeFlowRate = GetTimeFlowRate();
 	OutState.WeatherBlendAlpha = static_cast<float>(QuantisedWeatherAlpha) / 255.f;
 	OutState.WeatherPresetA = WeatherPresetA;

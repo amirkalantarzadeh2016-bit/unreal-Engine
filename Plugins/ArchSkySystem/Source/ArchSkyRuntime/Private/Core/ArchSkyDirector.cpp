@@ -50,10 +50,12 @@ namespace ArchSkyDirectorConstants
 	template <typename ActorType>
 	void SetNetUpdateFrequencyCompat(ActorType& Actor, float Hz)
 	{
-#if UE_VERSION_NEWER_THAN(5, 5, 0)
-		Actor.SetNetUpdateFrequency(Hz);
-#else
+		// OLDER_THAN, not NEWER_THAN: the member became private in 5.5.0 itself, so the
+		// boundary release must take the setter branch - which NEWER_THAN(5,5,0) excludes.
+#if UE_VERSION_OLDER_THAN(5, 5, 0)
 		Actor.NetUpdateFrequency = Hz;
+#else
+		Actor.SetNetUpdateFrequency(Hz);
 #endif
 	}
 

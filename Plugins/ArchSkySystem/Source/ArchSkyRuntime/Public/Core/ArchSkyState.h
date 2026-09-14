@@ -101,17 +101,35 @@ struct ARCHSKYRUNTIME_API FArchSkyReplicatedState
 {
 	GENERATED_BODY()
 
-	/** Time of day quantised to 1/1000 of an hour (3.6 s), well below one frame of drift. */
+	/**
+	 * Time of day quantised to 1/1000 of an hour (3.6 s), well below one frame of drift.
+	 *
+	 * ARCH NOTE ON THE TYPE: int32, not the uint16 the value actually needs. Unreal's
+	 * Blueprint type system supports only uint8, int32 and int64 for integers, and this
+	 * struct is BlueprintType so that replication can be inspected from a Blueprint when
+	 * something goes wrong in a multi-machine review session - which is exactly when you
+	 * cannot attach a C++ debugger.
+	 *
+	 * The wider type costs six bytes per update across the three fields here. At the
+	 * default 2 Hz that is twelve bytes a second, which is not worth trading debuggability
+	 * for. The quantisation still earns its place regardless of storage width: it is what
+	 * makes operator== stable, so the Director pushes an update only when the value
+	 * genuinely moved rather than every time a float's last bit wobbles.
+	 *
+	 * If a project ever does need the bytes, the answer is a custom NetSerialize on this
+	 * struct writing explicit bit counts - not a narrower UPROPERTY, which Blueprint
+	 * rejects outright.
+	 */
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|Networking")
-	uint16 QuantisedTimeOfDay = 0;
+	int32 QuantisedTimeOfDay = 0;
 
-	/** 1-based day of the year. */
+	/** 1-based day of the year. See the note on QuantisedTimeOfDay for why this is int32. */
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|Networking")
-	uint16 DayOfYear = 172;
+	int32 DayOfYear = 172;
 
-	/** Gregorian year. */
+	/** Gregorian year. See the note on QuantisedTimeOfDay for why this is int32. */
 	UPROPERTY(BlueprintReadOnly, Category = "ArchSky|Networking")
-	uint16 Year = 2026;
+	int32 Year = 2026;
 
 	/**
 	 * Simulated hours per real second, quantised to 1/100. Lets clients predict forward.

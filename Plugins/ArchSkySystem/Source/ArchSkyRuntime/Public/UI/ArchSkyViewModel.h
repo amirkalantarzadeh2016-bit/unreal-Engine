@@ -16,6 +16,7 @@
 
 class UArchSkyPlaybackSubsystem;
 class UArchSkySubsystem;
+class UTexture2D;
 
 /** Fired once per coalesced update. The widget rebinds everything from this one event. */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnArchViewModelUpdated);

@@ -6,6 +6,8 @@
 #include "Core/ArchSkyPlaybackTypes.h"
 #include "Curves/CurveFloat.h"
 #include "Engine/DeveloperSettings.h"
+// FDirectoryPath, used by PresetScanPaths. DeveloperSettings.h does not pull it in.
+#include "Engine/EngineTypes.h"
 #include "Math/ArchSolarTypes.h"
 
 #include "ArchSkySettings.generated.h"
@@ -233,7 +235,7 @@ public:
 
 	/** How often the Director pushes replicated sky state, in Hz. Clients interpolate between. */
 	UPROPERTY(config, EditAnywhere, BlueprintReadOnly, Category = "Networking",
-		meta = (ClampMin = "0.5", ClampMax = "30.0", UIMin = "1.0", UIMax = "10.0", Units = "Hz"))
+		meta = (ClampMin = "0.5", ClampMax = "30.0", UIMin = "1.0", UIMax = "10.0", Units = "Hertz"))
 	float ReplicationUpdateFrequencyHz = 2.f;
 
 	// --- Content ---------------------------------------------------------------------------

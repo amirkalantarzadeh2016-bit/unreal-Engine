@@ -215,7 +215,7 @@ struct ARCHSKYRUNTIME_API FArchWeatherParams
 
 	/** Exposure bias in stops. Overcast presets usually want a small negative value. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Post Process",
-		meta = (ClampMin = "-5.0", ClampMax = "5.0", UIMin = "-3.0", UIMax = "3.0", Units = "Stops"))
+		meta = (ClampMin = "-5.0", ClampMax = "5.0", UIMin = "-3.0", UIMax = "3.0", Units = "ExposureValue"))
 	float ExposureCompensation = 0.f;
 
 	/** Multiplier on bloom intensity. Hazy and dusty presets raise it. */
