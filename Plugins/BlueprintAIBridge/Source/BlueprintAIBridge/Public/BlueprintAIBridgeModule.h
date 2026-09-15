@@ -5,7 +5,6 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
-class FToolMenuContext;
 class SBPAIBridgePanel;
 class SDockTab;
 class FSpawnTabArgs;
@@ -43,9 +42,6 @@ private:
 
 	/** Toolbar button on the Blueprint asset editors, which knows what is being edited. */
 	void RegisterAssetEditorToolbars();
-
-	/** Toolbar handler: works out which Blueprint the clicked editor holds, then opens. */
-	void OpenPanelFromToolbar(const FToolMenuContext& Context);
 
 	/**
 	 * The panel this module last spawned.

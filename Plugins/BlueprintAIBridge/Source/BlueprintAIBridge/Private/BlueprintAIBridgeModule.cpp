@@ -4,7 +4,6 @@
 
 #include "SBPAIBridgePanel.h"
 #include "Engine/Blueprint.h"
-#include "Toolkits/AssetEditorToolkit.h"
 #include "Toolkits/AssetEditorToolkitMenuContext.h"
 #include "ToolMenus.h"
 #include "Framework/Application/SlateApplication.h"
@@ -137,8 +136,35 @@ void FBlueprintAIBridgeModule::RegisterAssetEditorToolbars()
 			LOCTEXT("ToolbarSection", "AI"));
 
 		FToolUIAction Action;
-		Action.ExecuteAction = FToolMenuExecuteAction::CreateRaw(
-			this, &FBlueprintAIBridgeModule::OpenPanelFromToolbar);
+		Action.ExecuteAction = FToolMenuExecuteAction::CreateLambda(
+			[this](const FToolMenuContext& Context)
+			{
+				// The asset editor puts its toolkit in the menu context, and the Blueprint that
+				// toolkit is editing is what "this one" means. The toolkit's own accessor for
+				// the edited objects is protected, so the context's public one is the way in.
+				UBlueprint* Blueprint = nullptr;
+
+				if (UAssetEditorToolkitMenuContext* ToolkitContext = Context.FindContext<UAssetEditorToolkitMenuContext>())
+				{
+					for (UObject* EditedObject : ToolkitContext->GetEditingObjects())
+					{
+						if (UBlueprint* Candidate = Cast<UBlueprint>(EditedObject))
+						{
+							Blueprint = Candidate;
+							break;
+						}
+					}
+				}
+
+				// Unresolvable context is not a failure: the panel opens, unselected, as before.
+				if (Blueprint == nullptr)
+				{
+					UE_LOG(LogBlueprintAIBridge, Verbose,
+						TEXT("Toolbar button could not determine the Blueprint being edited; opening the panel unselected."));
+				}
+
+				OpenPanel(Blueprint);
+			});
 
 		Section.AddEntry(FToolMenuEntry::InitToolBarButton(
 			TEXT("OpenBlueprintAIBridge"),
@@ -147,37 +173,6 @@ void FBlueprintAIBridgeModule::RegisterAssetEditorToolbars()
 			LOCTEXT("ToolbarTooltip", "Open the Blueprint AI Bridge on this Blueprint."),
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.Blueprint")));
 	}
-}
-
-void FBlueprintAIBridgeModule::OpenPanelFromToolbar(const FToolMenuContext& Context)
-{
-	// The asset editor puts its toolkit in the menu context; the Blueprint it is editing is
-	// what the developer means by "this one". If any of that is unavailable the panel still
-	// opens -- they just pick the asset themselves, as before.
-	UBlueprint* Blueprint = nullptr;
-
-	if (UAssetEditorToolkitMenuContext* ToolkitContext = Context.FindContext<UAssetEditorToolkitMenuContext>())
-	{
-		if (TSharedPtr<FAssetEditorToolkit> Toolkit = ToolkitContext->Toolkit.Pin())
-		{
-			for (UObject* EditedObject : Toolkit->GetEditingObjects())
-			{
-				if (UBlueprint* Candidate = Cast<UBlueprint>(EditedObject))
-				{
-					Blueprint = Candidate;
-					break;
-				}
-			}
-		}
-	}
-
-	if (Blueprint == nullptr)
-	{
-		UE_LOG(LogBlueprintAIBridge, Verbose,
-			TEXT("Toolbar button could not determine the Blueprint being edited; opening the panel unselected."));
-	}
-
-	OpenPanel(Blueprint);
 }
 
 #undef LOCTEXT_NAMESPACE
