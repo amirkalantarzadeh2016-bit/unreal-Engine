@@ -48,6 +48,10 @@ private:
 	/** Where the file browser opens next time; seeded from the snapshot directory. */
 	FString LastResponseDirectory;
 	FString LastSnapshotPath;
+
+	/** Where the last "Save JSON File..." went, and the folder to reopen the save dialog in. */
+	FString LastSavedExportPath;
+	FString LastExportDirectory;
 	TArray<FBPDiffItem> CurrentDiff;
 	TArray<bool> DiffItemAccepted; // parallel array to CurrentDiff
 
@@ -63,6 +67,7 @@ private:
 
 	// ---- Widgets -----------------------------------------------------------------------
 	TSharedPtr<SMultiLineEditableTextBox> TaskDescBox;
+	TSharedPtr<SMultiLineEditableTextBox> ExportPreviewBox;
 	TSharedPtr<SMultiLineEditableTextBox> AIResponseBox;
 	TSharedPtr<SListView<TSharedPtr<FBPDiffItem>>> DiffListView;
 	TSharedPtr<STextBlock> StatusText;
@@ -102,6 +107,8 @@ private:
 	// ---- Button handlers ---------------------------------------------------------------
 	FReply OnExportClicked();
 	FReply OnCopyToClipboardClicked();
+	FReply OnSaveExportToFileClicked();
+	FReply OnShowExportInExplorerClicked();
 	FReply OnLoadResponseFromFileClicked();
 	FReply OnAnalyzeDiffClicked();
 	FReply OnApplyChangesClicked();
@@ -112,6 +119,12 @@ private:
 	bool HasBlueprint() const;
 	bool HasExport() const;
 	bool HasDiff() const;
+
+	/** True once a file has been written this session, which is what "Show in Explorer" needs. */
+	bool HasExportFile() const;
+
+	/** The "Export file: ..." line under the export buttons -- selectable, so it can be copied. */
+	FText GetExportFileText() const;
 
 	// ---- List view ---------------------------------------------------------------------
 	TSharedRef<ITableRow> GenerateDiffRow(
@@ -137,4 +150,13 @@ private:
 
 	/** Export JSON + prompt prefix combined, ready for the clipboard. */
 	FString BuildFullExportPayload();
+
+	/** Puts the current payload in the preview box, or empties it when there is no export. */
+	void RefreshExportPreview();
+
+	/** Keeps the preview honest when the task description -- part of the prompt -- changes. */
+	void OnTaskTextCommitted(const FText& NewText, ETextCommit::Type CommitType);
+
+	/** Default filename for the save dialog: <BlueprintName>_<UTC stamp>.json. */
+	FString SuggestExportFilename() const;
 };

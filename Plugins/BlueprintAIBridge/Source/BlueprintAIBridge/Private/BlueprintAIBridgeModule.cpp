@@ -116,11 +116,32 @@ void FBlueprintAIBridgeModule::RegisterAssetEditorToolbars()
 {
 	FToolMenuOwnerScoped OwnerScoped(this);
 
-	// The asset editors whose toolbars are worth carrying the button. Extending a menu that
-	// does not exist in this editor build is harmless -- the entry simply never renders.
+	// The Blueprint editors are FWorkflowCentricApplications, and that class appends the current
+	// application mode to the toolbar's menu name -- so the toolbar actually on screen is
+	// "AssetEditor.BlueprintEditor.ToolBar.GraphName", not "AssetEditor.BlueprintEditor.ToolBar".
+	// The unsuffixed name is the parent of those, and extending only the parent left the button
+	// invisible, so every mode is named here explicitly.
+	//
+	// Extending a menu that does not exist in this editor build is harmless: the extension sits
+	// unused and nothing renders. Entries carry the same name in every menu, so a mode whose
+	// toolbar does inherit from the parent shows one button, not two.
 	static const TCHAR* ToolbarMenus[] = {
+		// Blueprint editor: parent, then Graph / Defaults / Components / Interface / Macro modes.
 		TEXT("AssetEditor.BlueprintEditor.ToolBar"),
-		TEXT("AssetEditor.WidgetBlueprintEditor.ToolBar")
+		TEXT("AssetEditor.BlueprintEditor.ToolBar.GraphName"),
+		TEXT("AssetEditor.BlueprintEditor.ToolBar.DefaultsName"),
+		TEXT("AssetEditor.BlueprintEditor.ToolBar.Components"),
+		TEXT("AssetEditor.BlueprintEditor.ToolBar.Interface"),
+		TEXT("AssetEditor.BlueprintEditor.ToolBar.Macro"),
+
+		// Widget Blueprint editor: parent, then Designer / Graph modes.
+		TEXT("AssetEditor.WidgetBlueprintEditor.ToolBar"),
+		TEXT("AssetEditor.WidgetBlueprintEditor.ToolBar.DesignerName"),
+		TEXT("AssetEditor.WidgetBlueprintEditor.ToolBar.GraphName"),
+
+		// Animation Blueprint editor: parent, then its single graph mode.
+		TEXT("AssetEditor.AnimationBlueprintEditor.ToolBar"),
+		TEXT("AssetEditor.AnimationBlueprintEditor.ToolBar.GraphName")
 	};
 
 	for (const TCHAR* MenuName : ToolbarMenus)
@@ -172,6 +193,8 @@ void FBlueprintAIBridgeModule::RegisterAssetEditorToolbars()
 			LOCTEXT("ToolbarLabel", "AI Bridge"),
 			LOCTEXT("ToolbarTooltip", "Open the Blueprint AI Bridge on this Blueprint."),
 			FSlateIcon(FAppStyle::GetAppStyleSetName(), "ClassIcon.Blueprint")));
+
+		UE_LOG(LogBlueprintAIBridge, Verbose, TEXT("Registered the toolbar button on '%s'."), MenuName);
 	}
 }
 

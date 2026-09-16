@@ -14,7 +14,10 @@
 #include "BlueprintAIBridgeModule.h"
 #include "EdGraph/EdGraph.h"
 #include "Engine/Blueprint.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformApplicationMisc.h"
+#include "HAL/PlatformProcess.h"
+#include "Misc/DateTime.h"
 #include "Misc/FileHelper.h"
 #include "Misc/MessageDialog.h"
 #include "Misc/Paths.h"
@@ -26,6 +29,7 @@
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SComboBox.h"
+#include "Widgets/Input/SEditableTextBox.h"
 #include "Widgets/Input/SMultiLineEditableTextBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
@@ -209,6 +213,67 @@ void SBPAIBridgePanel::Construct(const FArguments& InArgs)
 				]
 			]
 
+			// ---- Export preview ----------------------------------------------------------
+			// The export used to exist only in memory and in an internal snapshot file, so the
+			// only way to see it was the clipboard. It is shown here instead: readable,
+			// selectable, and with the file it was written to named underneath.
+			+ SScrollBox::Slot()
+			.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(STextBlock)
+				.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+				.Text(LOCTEXT("ExportPreviewHeading", "Export Preview"))
+			]
+
+			+ SScrollBox::Slot()
+			.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(SBox)
+				.HeightOverride(160.0f)
+				[
+					SAssignNew(ExportPreviewBox, SMultiLineEditableTextBox)
+					.AutoWrapText(false)
+					.IsReadOnly(true)
+					.HintText(LOCTEXT("ExportPreviewHint", "Click Export for AI to fill this with the prompt and the graph JSON."))
+				]
+			]
+
+			+ SScrollBox::Slot()
+			.Padding(0.0f, 0.0f, 0.0f, 4.0f)
+			[
+				SNew(SHorizontalBox)
+
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.Padding(0.0f, 0.0f, 4.0f, 0.0f)
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("SaveExportButton", "Save JSON File..."))
+					.ToolTipText(LOCTEXT("SaveExportTooltip", "Write the export JSON to a .json file of your choosing. The file holds the JSON alone, so it stays valid JSON; the prompt above is only for the clipboard."))
+					.IsEnabled(this, &SBPAIBridgePanel::HasExport)
+					.OnClicked(this, &SBPAIBridgePanel::OnSaveExportToFileClicked)
+				]
+
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SButton)
+					.Text(LOCTEXT("ShowExportButton", "Show in Explorer"))
+					.ToolTipText(LOCTEXT("ShowExportTooltip", "Open the folder holding the file named below."))
+					.IsEnabled(this, &SBPAIBridgePanel::HasExportFile)
+					.OnClicked(this, &SBPAIBridgePanel::OnShowExportInExplorerClicked)
+				]
+			]
+
+			+ SScrollBox::Slot()
+			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
+			[
+				SNew(SEditableTextBox)
+				.IsReadOnly(true)
+				.Text(this, &SBPAIBridgePanel::GetExportFileText)
+				.ToolTipText(LOCTEXT("ExportFileTooltip", "Every export also writes an internal snapshot, which is what Revert reads back. This box is read-only but selectable, so the path can be copied out."))
+			]
+
 			+ SScrollBox::Slot()
 			.Padding(0.0f, 0.0f, 0.0f, 8.0f)
 			[
@@ -229,6 +294,7 @@ void SBPAIBridgePanel::Construct(const FArguments& InArgs)
 			[
 				SAssignNew(TaskDescBox, SMultiLineEditableTextBox)
 				.AutoWrapText(true)
+				.OnTextCommitted(this, &SBPAIBridgePanel::OnTaskTextCommitted)
 				.HintText(LOCTEXT("TaskHint", "Describe what you want the AI to change, e.g. \"the door never closes after the first use\"."))
 			]
 
@@ -477,6 +543,8 @@ void SBPAIBridgePanel::SetBlueprint(UBlueprint* Blueprint)
 	// A different Blueprint invalidates everything downstream of the export.
 	LastExportJson.Reset();
 	LastSnapshotPath.Reset();
+	LastSavedExportPath.Reset();
+	RefreshExportPreview();
 	ClearDiff();
 	RefreshGraphOptions();
 
@@ -657,6 +725,11 @@ FReply SBPAIBridgePanel::OnExportClicked()
 	}
 
 	ClearDiff();
+	RefreshExportPreview();
+
+	// A new export invalidates the file the old one went to; the path line should not go on
+	// pointing at a file whose contents no longer match what is on screen.
+	LastSavedExportPath.Reset();
 
 	LastSnapshotPath = FBPSnapshotStore::SaveSnapshot(Blueprint->GetPathName(), LastExportJson);
 
@@ -697,6 +770,133 @@ FReply SBPAIBridgePanel::OnCopyToClipboardClicked()
 
 	UpdateStatus(FString::Printf(TEXT("Copied %d characters (prompt + JSON) to the clipboard."), Payload.Len()));
 	return FReply::Handled();
+}
+
+void SBPAIBridgePanel::OnTaskTextCommitted(const FText& /*NewText*/, ETextCommit::Type /*CommitType*/)
+{
+	// The task description is part of the prompt prefix, so the preview goes stale the moment it
+	// changes. Rebuilt on commit rather than on each keystroke: the payload can be hundreds of
+	// kilobytes, and Copy/Save rebuild it from scratch anyway.
+	RefreshExportPreview();
+}
+
+void SBPAIBridgePanel::RefreshExportPreview()
+{
+	if (!ExportPreviewBox.IsValid())
+	{
+		return;
+	}
+
+	// Deliberately the clipboard payload rather than the bare JSON: what the preview shows and
+	// what Copy to Clipboard produces have to be the same thing, or the preview lies.
+	ExportPreviewBox->SetText(
+		LastExportJson.IsEmpty() ? FText::GetEmpty() : FText::FromString(BuildFullExportPayload()));
+}
+
+FString SBPAIBridgePanel::SuggestExportFilename() const
+{
+	const FString AssetName = SelectedBlueprint.IsValid()
+		? SelectedBlueprint->GetName()
+		: TEXT("Blueprint");
+
+	return FString::Printf(TEXT("%s_%s.json"), *AssetName, *FDateTime::UtcNow().ToString(TEXT("%Y%m%d_%H%M%S")));
+}
+
+FReply SBPAIBridgePanel::OnSaveExportToFileClicked()
+{
+	if (LastExportJson.IsEmpty())
+	{
+		UpdateStatus(TEXT("Nothing to save. Export first."), /*bIsError*/ true);
+		return FReply::Handled();
+	}
+
+	IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+	if (DesktopPlatform == nullptr)
+	{
+		UpdateStatus(TEXT("No file browser is available on this platform; copy the preview instead."), /*bIsError*/ true);
+		return FReply::Handled();
+	}
+
+	if (LastExportDirectory.IsEmpty())
+	{
+		LastExportDirectory = FPaths::ConvertRelativePathToFull(
+			FPaths::ProjectSavedDir() / TEXT("BlueprintAIBridge/Exports/"));
+
+		// The dialog ignores a folder that is not there and opens somewhere arbitrary instead,
+		// which is exactly the "where did it go?" problem this button exists to solve.
+		IFileManager::Get().MakeDirectory(*LastExportDirectory, /*Tree*/ true);
+	}
+
+	TArray<FString> ChosenFiles;
+	const bool bPicked = DesktopPlatform->SaveFileDialog(
+		FSlateApplication::Get().FindBestParentWindowHandleForDialogs(AsShared()),
+		LOCTEXT("SaveExportTitle", "Save export JSON").ToString(),
+		LastExportDirectory,
+		SuggestExportFilename(),
+		TEXT("JSON files (*.json)|*.json|All files (*.*)|*.*"),
+		EFileDialogFlags::None,
+		ChosenFiles);
+
+	if (!bPicked || ChosenFiles.Num() == 0)
+	{
+		return FReply::Handled();
+	}
+
+	FString FilePath = FPaths::ConvertRelativePathToFull(ChosenFiles[0]);
+	if (FPaths::GetExtension(FilePath).IsEmpty())
+	{
+		FilePath += TEXT(".json");
+	}
+
+	// The JSON alone, not the clipboard payload: a .json file with a prompt and a markdown fence
+	// in front of it is not JSON, and would not survive being read back by Load JSON File.
+	if (!FFileHelper::SaveStringToFile(LastExportJson, *FilePath))
+	{
+		UpdateStatus(FString::Printf(TEXT("Could not write '%s'. Check the folder exists and is writable."), *FilePath), /*bIsError*/ true);
+		return FReply::Handled();
+	}
+
+	LastSavedExportPath = FilePath;
+	LastExportDirectory = FPaths::GetPath(FilePath);
+
+	UpdateStatus(FString::Printf(TEXT("Saved %d characters of JSON to %s"), LastExportJson.Len(), *FilePath));
+	return FReply::Handled();
+}
+
+FReply SBPAIBridgePanel::OnShowExportInExplorerClicked()
+{
+	// Whichever file the path line is naming: the one they saved if they saved one, otherwise
+	// the snapshot, which is the file they would otherwise have to go hunting for under Saved/.
+	const FString Target = LastSavedExportPath.IsEmpty() ? LastSnapshotPath : LastSavedExportPath;
+
+	if (Target.IsEmpty())
+	{
+		UpdateStatus(TEXT("No file to show yet. Export first."), /*bIsError*/ true);
+		return FReply::Handled();
+	}
+
+	FPlatformProcess::ExploreFolder(*Target);
+	return FReply::Handled();
+}
+
+bool SBPAIBridgePanel::HasExportFile() const
+{
+	return !LastSavedExportPath.IsEmpty() || !LastSnapshotPath.IsEmpty();
+}
+
+FText SBPAIBridgePanel::GetExportFileText() const
+{
+	if (!LastSavedExportPath.IsEmpty())
+	{
+		return FText::FromString(FString::Printf(TEXT("Saved file: %s"), *LastSavedExportPath));
+	}
+
+	if (!LastSnapshotPath.IsEmpty())
+	{
+		return FText::FromString(FString::Printf(TEXT("Snapshot (internal): %s"), *LastSnapshotPath));
+	}
+
+	return LOCTEXT("NoExportFile", "No file written yet.");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -940,6 +1140,7 @@ FReply SBPAIBridgePanel::OnApplyChangesClicked()
 	{
 		ClearDiff();
 		LastExportJson.Reset();
+		RefreshExportPreview();
 
 		// An import can add a function graph, so the scope combo needs rebuilding -- keeping
 		// the user's choice, since the auto-format below reads it.
@@ -1024,6 +1225,7 @@ FReply SBPAIBridgePanel::OnRevertSnapshotClicked()
 
 	ClearDiff();
 	LastExportJson.Reset();
+	RefreshExportPreview();
 
 	return FReply::Handled();
 }

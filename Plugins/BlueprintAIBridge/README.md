@@ -12,9 +12,15 @@ AI's suggested changes back into the asset behind a reviewable diff.
      when no Blueprint editor is open.
 2. Pick a Blueprint, pick a context (Bug Fix / Refactor / Feature Request / Code Review /
    General) and an export scope (all graphs, or one graph at a time for large assets).
-3. **Export for AI** writes a snapshot to `Saved/BlueprintAIBridge/Snapshots/`.
-4. Type what you want changed in **Task Description**, then **Copy to Clipboard** — you get the
-   prompt prefix and the JSON in one paste.
+3. **Export for AI** fills **Export Preview** with exactly what the clipboard button produces,
+   and writes a snapshot to `Saved/BlueprintAIBridge/Snapshots/`. The snapshot is internal --
+   it is what **Revert to Snapshot** reads back -- and the path line under the preview names it.
+4. Type what you want changed in **Task Description**, then get the payload out however suits:
+   - **Copy to Clipboard** — prompt prefix and JSON in one paste.
+   - select and copy straight out of **Export Preview**, which is read-only but selectable.
+   - **Save JSON File...** — writes the JSON on its own (no prompt, no fence, so the file stays
+     valid JSON) wherever you point it, defaulting to `Saved/BlueprintAIBridge/Exports/`.
+   - **Show in Explorer** — opens the folder holding whichever file the path line names.
 5. Get the reply into **AI Response JSON** — either paste it, or click **Load JSON File...**
    and pick the file, which loads it and runs the analysis in one step. Either way the text may
    be wrapped in a ```json fence or surrounded by prose; the JSON object is pulled out of it.
